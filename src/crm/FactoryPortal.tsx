@@ -1,39 +1,28 @@
-import { useState } from "react";
-import { categories, methods } from "../../shared/quoting.ts";
+import { lazy, Suspense, useState } from "react";
+import {
+  factoryRuleSchema,
+  pricingLabels,
+  basisLabels,
+  type FactoryProduct,
+} from "../../shared/factory.ts";
 import { useMutation, useResource } from "./api.ts";
 import { useSession } from "./context.tsx";
-import { ErrorBox, Field, Loading, Panel } from "./ui.tsx";
+import { ErrorBox, Field, Loading, Panel, Modal } from "./ui.tsx";
 import { Purchase } from "./SupplyChain.tsx";
+import { NumberField } from "./NumberField.tsx";
+const FactoryProductEditor = lazy(() =>
+  import("./FactoryProductEditor.tsx").then((module) => ({
+    default: module.FactoryProductEditor,
+  })),
+);
 
-type FactoryProduct = {
-  id: string;
-  factory_id: string;
-  factory_name: string;
-  sku: string;
-  name_zh: string;
-  name_en: string;
-  category: string;
-  series: string;
-  specification: string;
-  image_urls: string[];
-  supply_price: string;
-  currency: string;
-  pricing_method: string;
-  pricing_rule: Record<string, unknown>;
-  lead_days: number;
-  status: string;
-  review_note: string;
-  version: number;
-};
 type PurchaseOrder = {
   id: string;
   order_number: string;
   status: string;
   promised_date: string | null;
-  factory_confirmed_at: string | null;
-  factory_confirmed_price: string | null;
   factory_name: string;
-  company: string;
+  company?: string;
 };
 const labels: Record<string, string> = {
   draft: "草稿",
@@ -48,180 +37,271 @@ export function FactoryProducts() {
     products = useResource<FactoryProduct[]>(
       "/supply/factory-products",
       revision,
-    ),
-    [show, setShow] = useState(false);
+    );
+  const [editor, setEditor] = useState<FactoryProduct | "new" | null>(null);
   if (products.loading) return <Loading />;
   return (
-    <>
-      <Panel title={user.role === "factory" ? "我的供货产品" : "工厂产品审核"}>
-        <p className="quote-help">
-          供货价仅对工厂与授权公司人员可见。审核通过后，销售只能使用公司发布的销售价格。
-        </p>
-        {user.role === "factory" && (
-          <button className="primary" onClick={() => setShow(!show)}>
-            {show ? "收起录入" : "＋ 录入供货产品"}
-          </button>
-        )}
-        <ErrorBox message={products.error} />
-        {show && <FactoryProductForm close={() => setShow(false)} />}
-        <div className="supply-grid">
-          {products.data?.map((p) => (
-            <FactoryProductCard key={p.id} product={p} />
-          ))}
-        </div>
-        {!products.data?.length && (
-          <div className="supply-empty">暂无供货产品。</div>
-        )}
-      </Panel>
-    </>
-  );
-}
-function FactoryProductForm({ close }: { close: () => void }) {
-  const { refresh, notify } = useSession(),
-    m = useMutation(),
-    [form, setForm] = useState({
-      sku: "",
-      nameZh: "",
-      nameEn: "",
-      category: "推拉门",
-      series: "",
-      specification: "",
-      imageUrls: "",
-      supplyPrice: 0,
-      currency: "CNY",
-      pricingMethod: "area_options",
-      leadDays: 30,
-    });
-  const set = (key: string, value: unknown) =>
-    setForm((v) => ({ ...v, [key]: value }));
-  const save = () =>
-    void m.run(
-      "/supply/factory-products",
-      "POST",
-      {
-        ...form,
-        imageUrls: form.imageUrls
-          .split(/\r?\n/)
-          .map((v) => v.trim())
-          .filter(Boolean),
-        pricingRule: {},
-      },
-      () => {
-        refresh();
-        notify("产品草稿已保存，请核对后提交公司审核");
-        close();
-      },
-    );
-  return (
-    <div className="factory-form">
-      <div className="form-grid">
-        <Field label="产品编号 *">
-          <input
-            value={form.sku}
-            onChange={(e) => set("sku", e.target.value)}
-          />
-        </Field>
-        <Field label="中文名称 *">
-          <input
-            value={form.nameZh}
-            onChange={(e) => set("nameZh", e.target.value)}
-          />
-        </Field>
-        <Field label="英文名称">
-          <input
-            value={form.nameEn}
-            onChange={(e) => set("nameEn", e.target.value)}
-          />
-        </Field>
-        <Field label="产品类别">
-          <select
-            value={form.category}
-            onChange={(e) => set("category", e.target.value)}
-          >
-            {categories.map((v) => (
-              <option key={v}>{v}</option>
-            ))}
-          </select>
-        </Field>
-        <Field label="系列">
-          <input
-            value={form.series}
-            onChange={(e) => set("series", e.target.value)}
-          />
-        </Field>
-        <Field label="供货价（人民币）">
-          <input
-            type="number"
-            min={0}
-            step="0.01"
-            value={form.supplyPrice}
-            onChange={(e) => set("supplyPrice", Number(e.target.value))}
-          />
-        </Field>
-        <Field label="计价方式">
-          <select
-            value={form.pricingMethod}
-            onChange={(e) => set("pricingMethod", e.target.value)}
-          >
-            {methods.map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="常规交期（天）">
-          <input
-            type="number"
-            min={0}
-            value={form.leadDays}
-            onChange={(e) => set("leadDays", Number(e.target.value))}
-          />
-        </Field>
-        <Field label="规格说明" wide>
-          <textarea
-            value={form.specification}
-            onChange={(e) => set("specification", e.target.value)}
-          />
-        </Field>
-        <Field label="产品图片 HTTPS 地址（每行一个）" wide>
-          <textarea
-            value={form.imageUrls}
-            onChange={(e) => set("imageUrls", e.target.value)}
-          />
-        </Field>
-      </div>
-      <ErrorBox message={m.error} />
-      <div className="actions">
-        <button
-          className="primary"
-          disabled={m.busy || !form.sku.trim() || !form.nameZh.trim()}
-          onClick={save}
-        >
-          保存草稿
+    <Panel title={user.role === "factory" ? "我的供货产品" : "工厂产品审核"}>
+      <p className="quote-help">
+        工厂录入供货成本，公司单独设置销售价。只有审核通过的版本才会发布到销售目录。
+      </p>
+      {user.role === "factory" && (
+        <button className="primary" onClick={() => setEditor("new")}>
+          ＋ 录入供货产品
         </button>
-        <button onClick={close}>取消</button>
+      )}
+      <ErrorBox message={products.error} />
+      <div className="factory-catalog-grid">
+        {products.data?.map((p) => (
+          <FactoryProductCard
+            key={`${p.id}:${p.version}`}
+            product={p}
+            edit={() => setEditor(p)}
+          />
+        ))}
       </div>
-    </div>
+      {!products.data?.length && (
+        <div className="supply-empty">暂无供货产品。</div>
+      )}
+      {editor && (
+        <Modal
+          title={editor === "new" ? "录入供货产品" : `编辑 ${editor.sku}`}
+          close={() => setEditor(null)}
+        >
+          <Suspense fallback={<Loading />}>
+            <FactoryProductEditor
+              key={editor === "new" ? "new" : editor.id}
+              product={editor === "new" ? undefined : editor}
+              close={() => setEditor(null)}
+            />
+          </Suspense>
+        </Modal>
+      )}
+    </Panel>
   );
 }
-function FactoryProductCard({ product: p }: { product: FactoryProduct }) {
+function FactoryProductCard({
+  product: p,
+  edit,
+}: {
+  product: FactoryProduct;
+  edit: () => void;
+}) {
   const { user, refresh, notify } = useSession(),
     m = useMutation(),
-    [note, setNote] = useState(""),
-    [guide, setGuide] = useState(Number(p.supply_price) * 1.4),
-    [minimum, setMinimum] = useState(Number(p.supply_price) * 1.2),
-    [retail, setRetail] = useState(Number(p.supply_price) * 1.6);
-  const submit = () =>
+    rule = factoryRuleSchema.parse(p.pricing_rule);
+  const writable =
+    user.role === "factory" && ["draft", "rejected"].includes(p.status);
+  const [reading, setReading] = useState(false);
+  const action = (name: string, message: string) =>
     void m.run(
-      `/supply/factory-products/${p.id}/submit`,
+      `/supply/factory-products/${p.id}/${name}`,
       "POST",
       { version: p.version },
       () => {
+        notify(message);
         refresh();
-        notify("已提交公司审核");
       },
     );
+  const upload = async (file: File) => {
+    if (
+      file.size > 2 * 1024 * 1024 ||
+      !["image/png", "image/jpeg", "image/webp"].includes(file.type)
+    ) {
+      m.setError("请选择不超过2MB的 PNG、JPEG 或 WebP 图片");
+      return;
+    }
+    setReading(true);
+    try {
+      const data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",")[1]);
+        reader.onerror = () => reject(new Error("读取图片失败"));
+        reader.readAsDataURL(file);
+      });
+      await m.run(
+        `/supply/factory-products/${p.id}/images`,
+        "POST",
+        { name: file.name, mime: file.type, data, version: p.version },
+        () => {
+          notify("产品图片已保存");
+          refresh();
+        },
+      );
+    } catch {
+      m.setError("图片读取失败，请重新选择");
+    } finally {
+      setReading(false);
+    }
+  };
+  return (
+    <article className="factory-product">
+      <div className="factory-product-head">
+        <b>
+          {p.sku} · {p.name_zh}
+        </b>
+        <span className="supply-status">{labels[p.status] ?? p.status}</span>
+      </div>
+      <p>
+        {p.factory_name} · {p.category} · {p.series || "未填写系列"}
+      </p>
+      <p>{p.specification || "未填写规格"}</p>
+      <dl>
+        <dt>工厂供货价</dt>
+        <dd>
+          {p.currency} {Number(p.supply_price).toFixed(2)}
+        </dd>
+        <dt>计价方式</dt>
+        <dd>{pricingLabels[p.pricing_method]}</dd>
+        <dt>交期 / 价格有效期</dt>
+        <dd>
+          {p.lead_days}天 / {rule.priceValidUntil ?? "未填写"}
+        </dd>
+      </dl>
+      <div className="factory-images">
+        {(p.image_ids ?? []).map((id, i) => (
+          <a
+            key={id}
+            href={`/api/supply/factory-product-images/${id}`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <img
+              src={`/api/supply/factory-product-images/${id}`}
+              loading="lazy"
+              alt={`${p.name_zh} 产品图${i + 1}`}
+            />
+          </a>
+        ))}
+      </div>
+      {!!p.image_urls?.length && (
+        <p className="quote-help">
+          保留了{p.image_urls.length}
+          个旧图片地址。为避免外部图片失效或跟踪，请在草稿中上传图片文件；旧网址不自动加载。
+        </p>
+      )}
+      <details>
+        <summary>查看尺寸、规格和供货规则</summary>
+        <p>
+          宽{rule.minWidthMm}–{rule.maxWidthMm}mm；高{rule.minHeightMm}–
+          {rule.maxHeightMm}mm；最低计费面积{rule.minArea}㎡
+        </p>
+        <dl>
+          {Object.entries(rule.standardSpecs)
+            .filter(([, v]) => v)
+            .map(([k, v]) => (
+              <div key={k}>
+                <dt>{k}</dt>
+                <dd>{v}</dd>
+              </div>
+            ))}
+        </dl>
+        <p>
+          包装：{rule.packing.type || "未配置"}；厚度{rule.packing.depthMm}
+          mm；每包{rule.packing.unitsPerPackage}件；包装成本
+          {rule.packing.costPerPackage ?? "待填"} CNY
+        </p>
+        <p>
+          宽/高余量 {rule.packing.widthAllowanceMm}/
+          {rule.packing.heightAllowanceMm}mm；净重
+          {rule.packing.kgPerSqm ?? "待填"}kg/㎡＋
+          {rule.packing.fixedKg ?? "待填"}kg/件；皮重
+          {rule.packing.tareKg ?? "待填"}kg/包
+        </p>
+        {rule.bands.map((b, i) => (
+          <p key={i}>
+            面积≤{b.maxArea}㎡：供货{b.cost} CNY/件
+          </p>
+        ))}
+        {rule.formula.map((f, i) => (
+          <p key={i}>
+            {f.name}：{basisLabels[f.basis]} × {f.coefficient} × 成本{f.cost}
+          </p>
+        ))}
+        {rule.options.map((o) => (
+          <p key={o.id}>
+            {o.nameZh}（{basisLabels[o.basis]}）：成本{o.cost ?? "待填"}；
+            {o.required ? "必选" : "可选"}
+          </p>
+        ))}
+      </details>
+      {p.review_note && (
+        <p className="quote-issues">审核意见：{p.review_note}</p>
+      )}
+      {writable && (
+        <>
+          <Field label="上传产品图片（每张≤2MB，最多12张）">
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              disabled={m.busy || reading || (p.image_ids?.length ?? 0) >= 12}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                if (f) void upload(f);
+              }}
+            />
+          </Field>
+          <div className="actions">
+            <button disabled={m.busy || reading} onClick={edit}>
+              编辑产品及计价规则
+            </button>
+            <button
+              className="primary"
+              disabled={m.busy || reading}
+              onClick={() => action("submit", "已提交公司审核")}
+            >
+              提交公司审核
+            </button>
+          </div>
+        </>
+      )}
+      {user.role === "factory" && p.status === "approved" && (
+        <>
+          <p className="quote-help">
+            发起修订后可修改产品、成本和图片；再次审核通过前，销售目录保持旧版本。
+          </p>
+          <button
+            disabled={m.busy}
+            onClick={() =>
+              action("revise", "已建立修订草稿，可以编辑后重新提交审核")
+            }
+          >
+            发起修订
+          </button>
+        </>
+      )}
+      {user.role === "admin" && p.status === "submitted" && (
+        <ProductReview product={p} />
+      )}
+      <ErrorBox message={m.error} />
+    </article>
+  );
+}
+function ProductReview({ product: p }: { product: FactoryProduct }) {
+  const { refresh, notify } = useSession(),
+    m = useMutation(),
+    rule = factoryRuleSchema.parse(p.pricing_rule);
+  const [note, setNote] = useState(""),
+    [guide, setGuide] = useState<number | null>(null),
+    [minimum, setMinimum] = useState<number | null>(null),
+    [retail, setRetail] = useState<number | null>(null),
+    [packing, setPacking] = useState<number | null>(null);
+  const [bands, setBands] = useState<(number | null)[]>(() =>
+      rule.bands.map(() => null),
+    ),
+    [formula, setFormula] = useState<(number | null)[]>(() =>
+      rule.formula.map(() => null),
+    ),
+    [options, setOptions] = useState<Record<string, number | null>>({});
+  const ready =
+    guide !== null &&
+    minimum !== null &&
+    guide >= minimum &&
+    packing !== null &&
+    bands.every((v) => v !== null) &&
+    formula.every((v) => v !== null) &&
+    rule.options.every((o) => options[o.id] != null);
   const review = (status: "approved" | "rejected") =>
     void m.run(
       `/supply/factory-products/${p.id}/review`,
@@ -234,92 +314,103 @@ function FactoryProductCard({ product: p }: { product: FactoryProduct }) {
         retailPrice: retail,
         active: true,
         version: p.version,
+        ...(status === "approved"
+          ? {
+              commercial: {
+                packingSale: packing,
+                bandSales: bands,
+                formulaSales: formula,
+                optionSales: options,
+              },
+            }
+          : {}),
       },
       () => {
-        refresh();
         notify(
           status === "approved" ? "已发布到销售产品目录" : "已退回工厂修改",
         );
+        refresh();
       },
     );
   return (
-    <div className="factory-product">
-      <div className="factory-product-head">
-        <b>
-          {p.sku} · {p.name_zh}
-        </b>
-        <span className="supply-status">{labels[p.status] || p.status}</span>
-      </div>
-      <p>
-        {p.factory_name} · {p.category} · {p.series || "未填写系列"}
+    <div className="factory-review">
+      <h4>公司销售定价（人民币）</h4>
+      <p className="quote-help">
+        请填写真实销售价格，不会自动按供货价加成。0表示已确认不收费，空白表示未配置。
       </p>
-      <p>{p.specification || "未填写规格"}</p>
-      <dl>
-        <dt>工厂供货价</dt>
-        <dd>
-          {p.currency} {Number(p.supply_price).toFixed(2)}
-        </dd>
-        <dt>计价方式</dt>
-        <dd>{p.pricing_method}</dd>
-        <dt>常规交期</dt>
-        <dd>{p.lead_days} 天</dd>
-      </dl>
-      {p.review_note && (
-        <p className="quote-issues">审核意见：{p.review_note}</p>
-      )}
-      {user.role === "factory" && ["draft", "rejected"].includes(p.status) && (
-        <button className="primary" disabled={m.busy} onClick={submit}>
-          提交公司审核
+      <NumberField
+        label="销售指导价"
+        nullable
+        value={guide}
+        onChange={setGuide}
+      />
+      <NumberField
+        label="最低销售价"
+        nullable
+        value={minimum}
+        onChange={setMinimum}
+      />
+      <NumberField
+        label="建议零售价（可空）"
+        nullable
+        value={retail}
+        onChange={setRetail}
+      />
+      <NumberField
+        label={`包装销售价 / 包（供货成本 ${rule.packing.costPerPackage}）`}
+        nullable
+        value={packing}
+        onChange={setPacking}
+      />
+      {rule.bands.map((b, i) => (
+        <NumberField
+          key={i}
+          label={`档位${i + 1} 销售价 / 件（≤${b.maxArea}㎡，成本${b.cost}）`}
+          nullable
+          value={bands[i]}
+          onChange={(v) => setBands(bands.map((r, n) => (n === i ? v : r)))}
+        />
+      ))}
+      {rule.formula.map((f, i) => (
+        <NumberField
+          key={i}
+          label={`构成${i + 1} ${f.name} 销售单价（成本${f.cost}）`}
+          nullable
+          value={formula[i]}
+          onChange={(v) => setFormula(formula.map((r, n) => (n === i ? v : r)))}
+        />
+      ))}
+      {rule.options.map((o) => (
+        <NumberField
+          key={o.id}
+          label={`选配 ${o.nameZh} 销售价（成本${o.cost}）`}
+          nullable
+          value={options[o.id] ?? null}
+          onChange={(v) => setOptions({ ...options, [o.id]: v })}
+        />
+      ))}
+      <Field label="审核意见">
+        <textarea value={note} onChange={(e) => setNote(e.target.value)} />
+      </Field>
+      <div className="actions">
+        <button
+          className="primary"
+          disabled={m.busy || !ready}
+          onClick={() => review("approved")}
+        >
+          审核通过并发布
         </button>
-      )}
-      {user.role === "admin" && p.status === "submitted" && (
-        <div className="factory-review">
-          <Field label="销售指导价">
-            <input
-              type="number"
-              value={guide}
-              onChange={(e) => setGuide(Number(e.target.value))}
-            />
-          </Field>
-          <Field label="最低销售价">
-            <input
-              type="number"
-              value={minimum}
-              onChange={(e) => setMinimum(Number(e.target.value))}
-            />
-          </Field>
-          <Field label="建议零售价">
-            <input
-              type="number"
-              value={retail}
-              onChange={(e) => setRetail(Number(e.target.value))}
-            />
-          </Field>
-          <Field label="审核意见">
-            <input value={note} onChange={(e) => setNote(e.target.value)} />
-          </Field>
-          <div className="actions">
-            <button
-              className="primary"
-              disabled={m.busy}
-              onClick={() => review("approved")}
-            >
-              审核通过并发布
-            </button>
-            <button
-              disabled={m.busy || !note.trim()}
-              onClick={() => review("rejected")}
-            >
-              退回修改
-            </button>
-          </div>
-        </div>
-      )}
+        <button
+          disabled={m.busy || !note.trim()}
+          onClick={() => review("rejected")}
+        >
+          退回修改
+        </button>
+      </div>
       <ErrorBox message={m.error} />
     </div>
   );
 }
-
 export function FactoryOrders() {
   const { user, revision } = useSession(),
     orders = useResource<PurchaseOrder[]>("/supply/purchase-orders", revision),
@@ -345,7 +436,7 @@ export function FactoryOrders() {
               <span>{o.company}</span>
               <span className="supply-status">{o.status}</span>
               <small>
-                {o.factory_name} · 交期 {o.promised_date || "待确认"}
+                {o.factory_name} · 交期{o.promised_date || "待确认"}
               </small>
             </button>
           ))}

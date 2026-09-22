@@ -39,6 +39,7 @@ const tables = [
   "factories",
   "factory_users",
   "factory_products",
+  "factory_product_images",
   "sales_orders",
   "sales_order_items",
   "purchase_orders",

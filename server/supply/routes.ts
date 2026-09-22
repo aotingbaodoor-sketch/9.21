@@ -3,7 +3,12 @@ import type pg from "pg";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { User } from "../../shared/contracts.ts";
-import { factoryProductSchema } from "../../shared/factory.ts";
+import {
+  factoryProductSchema,
+  factoryRuleSchema,
+  commercialPricesSchema,
+  factoryReadiness,
+} from "../../shared/factory.ts";
 import { productSchema } from "../../shared/quoting.ts";
 import { hashPassword, HttpError, requireAdmin } from "../domain.ts";
 import * as repo from "../repository.ts";
@@ -15,6 +20,11 @@ import {
   purchaseJoins,
 } from "./access.ts";
 import { registerFulfillment } from "./fulfillment.ts";
+import {
+  editableProduct,
+  registerCatalogImages,
+  validateImages,
+} from "./catalog-images.ts";
 
 type Mutate = (
   req: Request,
@@ -77,6 +87,7 @@ export function registerSupplyRoutes(
   mutate: Mutate,
 ) {
   registerFulfillment(app, pool, mutate);
+  registerCatalogImages(app, pool, mutate);
   app.get("/api/supply/orders", async (req, res) => {
     const rows = (
       await pool.query(
@@ -228,6 +239,8 @@ export function registerSupplyRoutes(
       const factory = await factoryForUser(db, req.actor),
         input = factoryProductSchema.parse(req.body),
         productId = randomUUID();
+      if (input.imageIds.length)
+        throw new HttpError(422, "请先保存产品，再上传图片");
       await db.query(
         "INSERT INTO factory_products(id,factory_id,sku,name_zh,name_en,category,series,specification,image_urls,supply_price,currency,pricing_method,pricing_rule,lead_days,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)",
         [
@@ -262,8 +275,15 @@ export function registerSupplyRoutes(
       const factory = await factoryForUser(db, req.actor),
         input = factoryProductSchema.parse(req.body),
         productId = uid(req.params.id);
+      await editableProduct(
+        db,
+        req.actor,
+        productId,
+        z.number().int().positive().parse(input.version),
+      );
+      await validateImages(db, productId, input.imageIds);
       const updated = await db.query(
-        "UPDATE factory_products SET sku=$3,name_zh=$4,name_en=$5,category=$6,series=$7,specification=$8,image_urls=$9,supply_price=$10,currency=$11,pricing_method=$12,pricing_rule=$13,lead_days=$14,status='draft',review_note='',version=version+1,updated_at=now() WHERE id=$1 AND factory_id=$2 AND status IN ('draft','rejected') AND version=$15 RETURNING id",
+        "UPDATE factory_products SET sku=$3,name_zh=$4,name_en=$5,category=$6,series=$7,specification=$8,image_urls=$9,supply_price=$10,currency=$11,pricing_method=$12,pricing_rule=$13,lead_days=$14,image_ids=$16,status='draft',review_note='',version=version+1,updated_at=now() WHERE id=$1 AND factory_id=$2 AND status IN ('draft','rejected') AND version=$15 RETURNING id",
         [
           productId,
           factory.id,
@@ -280,6 +300,7 @@ export function registerSupplyRoutes(
           JSON.stringify(input.pricingRule),
           input.leadDays,
           input.version,
+          JSON.stringify(input.imageIds),
         ],
       );
       if (!updated.rowCount)
@@ -295,12 +316,31 @@ export function registerSupplyRoutes(
       const factory = await factoryForUser(db, req.actor),
         productId = uid(req.params.id),
         version = z.number().int().positive().parse(req.body.version);
+      const row = await editableProduct(db, req.actor, productId, version);
+      const readiness = factoryReadiness(
+        factoryRuleSchema.parse(row.pricing_rule),
+        row.pricing_method,
+      );
+      if (readiness.length) throw new HttpError(422, readiness.join("；"));
       const updated = await db.query(
         "UPDATE factory_products SET status='submitted',submitted_at=now(),version=version+1,updated_at=now() WHERE id=$1 AND factory_id=$2 AND status IN ('draft','rejected') AND version=$3 RETURNING id",
         [productId, factory.id, version],
       );
       if (!updated.rowCount) throw new HttpError(409, "产品状态已变化，请刷新");
       await repo.audit(db, req.actor, "提交工厂产品审核", productId);
+      return { id: productId };
+    }),
+  );
+  app.post("/api/supply/factory-products/:id/revise", async (req, res) =>
+    mutate(req, res, async (db) => {
+      const productId = uid(req.params.id),
+        version = z.number().int().positive().parse(req.body.version);
+      await editableProduct(db, req.actor, productId, version, ["approved"]);
+      await db.query(
+        "UPDATE factory_products SET status='draft',review_note='',version=version+1,updated_at=now() WHERE id=$1",
+        [productId],
+      );
+      await repo.audit(db, req.actor, "工厂发起产品修订", productId);
       return { id: productId };
     }),
   );
@@ -317,11 +357,14 @@ export function registerSupplyRoutes(
           retailPrice: z.number().min(0).max(1e9).nullable().default(null),
           active: z.boolean().default(true),
           version: z.number().int().positive(),
+          commercial: commercialPricesSchema.default(
+            commercialPricesSchema.parse({}),
+          ),
         })
         .parse(req.body);
       const row = (
         await db.query(
-          "SELECT * FROM factory_products WHERE id=$1 AND status='submitted' FOR UPDATE",
+          "SELECT fp.* FROM factory_products fp JOIN factories f ON f.id=fp.factory_id WHERE fp.id=$1 AND fp.status='submitted' AND fp.deleted_at IS NULL AND f.active AND f.deleted_at IS NULL FOR UPDATE OF fp",
           [productId],
         )
       ).rows[0];
@@ -329,6 +372,8 @@ export function registerSupplyRoutes(
       if (row.version !== input.version)
         throw new HttpError(409, "产品已变化，请刷新");
       let approvedProductId = row.approved_product_id as string | null;
+      if (input.status === "rejected" && !input.note.trim())
+        throw new HttpError(422, "退回修改必须填写审核意见");
       if (input.status === "approved") {
         if (row.currency !== "CNY")
           throw new HttpError(
@@ -341,8 +386,37 @@ export function registerSupplyRoutes(
           input.guidePrice < input.minimumPrice
         )
           throw new HttpError(422, "发布前须设置有效的销售指导价及最低价");
+        const rule = factoryRuleSchema.parse(row.pricing_rule),
+          commercial = input.commercial;
+        const readiness = factoryReadiness(rule, row.pricing_method);
+        if (readiness.length) throw new HttpError(422, readiness.join("；"));
+        if (
+          commercial.packingSale === null ||
+          commercial.bandSales.length !== rule.bands.length ||
+          commercial.formulaSales.length !== rule.formula.length ||
+          rule.options.some((o) => commercial.optionSales[o.id] === undefined)
+        )
+          throw new HttpError(
+            422,
+            "请设置包装、全部档位、构成项和选配的公司销售价",
+          );
+        await validateImages(db, productId, row.image_ids);
         const product = productSchema.parse({
-          ...row.pricing_rule,
+          ...rule,
+          imageIds: row.image_ids,
+          packing: { ...rule.packing, salePerPackage: commercial.packingSale },
+          bands: rule.bands.map((b, i) => ({
+            ...b,
+            sale: commercial.bandSales[i],
+          })),
+          formula: rule.formula.map((f, i) => ({
+            ...f,
+            sale: commercial.formulaSales[i],
+          })),
+          options: rule.options.map((o) => ({
+            ...o,
+            sale: commercial.optionSales[o.id],
+          })),
           sku: row.sku,
           nameZh: row.name_zh,
           nameEn: row.name_en || row.name_zh,
@@ -360,8 +434,8 @@ export function registerSupplyRoutes(
             retail: input.retailPrice,
             special: null,
           },
-          standardSpecs: row.pricing_rule?.standardSpecs || {},
-          drawing: row.pricing_rule?.drawing || "custom",
+          standardSpecs: rule.standardSpecs,
+          drawing: rule.drawing,
         });
         if (approvedProductId)
           await db.query(

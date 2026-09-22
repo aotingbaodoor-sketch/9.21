@@ -24,7 +24,7 @@ export async function supplyScenario(ctx: {
     pricingRule: { ...fixture.product, id: undefined, prices: undefined },
   })).id;
   await ok(fa, `/supply/factory-products/${productId}/submit`, "POST", { version: 1 });
-  await ok(admin, `/supply/factory-products/${productId}/review`, "POST", { version: 2, status: "approved", note: "TEST pricing and packing checked", guidePrice: 1500, minimumPrice: 1200, retailPrice: 1800, active: true });
+  await ok(admin, `/supply/factory-products/${productId}/review`, "POST", { version: 2, status: "approved", note: "TEST pricing and packing checked", guidePrice: 1500, minimumPrice: 1200, retailPrice: 1800, active: true, commercial: { packingSale: 140 } });
   const product = (await ok(a, "/quoting/products")).find((p: { sku: string }) => p.sku === "FACTORY-CYCLE");
   assert.ok(product);
   const projectId = (await ok(a, "/quoting/projects", "POST", { customerId, name: "TEST full factory cycle" })).id;

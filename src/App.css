@@ -296,7 +296,19 @@ small,
   display: flex;
   flex-direction: column;
   z-index: 3;
+  overflow: hidden;
 }
+.sidebar > .brand,
+.sidebar > footer { flex-shrink: 0; }
+.sidebar nav {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-color: #a68b54 #292a2b;
+}
+.sidebar-scroll-hint { display: block; padding: 0 25px 10px; color: #b3aa97; font-size: 11px; }
 .brand {
   padding: 0 25px 28px;
   color: #c7a161;
@@ -324,7 +336,7 @@ small,
   color: #f5ead7;
 }
 .sidebar footer {
-  margin: auto 24px 0;
+  margin: 14px 24px 0;
   border-top: 1px solid #414141;
   padding-top: 18px;
   font-size: 12px;

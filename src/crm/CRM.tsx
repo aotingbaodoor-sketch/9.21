@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
   BrowserRouter,
   Link,
@@ -33,8 +33,9 @@ import ImportPage from "./ImportPage.tsx";
 import { Quotations, QuoteProject } from "./Quotations.tsx";
 import { QuoteAdmin } from "./QuoteAdmin.tsx";
 import { QuoteTasks } from "./QuoteTasks.tsx";
-import { SupplyChain } from "./SupplyChain.tsx";
-import { FactoryOrders, FactoryProducts } from "./FactoryPortal.tsx";
+import { SupplyChain, FactoryManager } from "./SupplyChain.tsx";
+const FactoryOrders = lazy(() => import("./FactoryPortal.tsx").then(module => ({default: module.FactoryOrders})));
+const FactoryProducts = lazy(() => import("./FactoryPortal.tsx").then(module => ({default: module.FactoryProducts})));
 import {
   MyWhatsApp,
   WhatsAppBadge,
@@ -150,7 +151,7 @@ function Root() {
       ...(["admin", "sales", "technical", "logistics"].includes(user.role) ? [["/supply", "订单供应链"]] : []),
       ...(user.role === "factory" ? [["/factory/products", "供货产品"], ["/factory/orders", "工厂订单"]] : []),
       ...(["coordinator","technical","logistics"].includes(user.role) ? [["/supply/assigned", "我的跟单任务"]] : []),
-      ...(user.role === "admin" ? [["/factory/products", "工厂产品审核"]] : []),
+      ...(user.role === "admin" ? [["/supply/factories", "合作工厂管理"], ["/factory/products", "工厂产品审核"]] : []),
     ].filter(([path]) => user.role === "factory" ? path.startsWith("/factory/") : user.role === "coordinator" ? path.startsWith('/supply/') : !specialist || path.startsWith("/quotations/") || path.startsWith("/supply")),
     title =
       (menus.find(([path]) => location.pathname === path) ||
@@ -166,7 +167,8 @@ function Root() {
             <b>{settings.name}</b>
             <small>AUTINBERG CRM</small>
           </div>
-          <nav>
+          {menus.length > 10 && <small className="sidebar-scroll-hint">菜单可上下滚动 ↓</small>}
+          <nav aria-label="主导航">
             {menus.map(([path, label]) => (
               <NavLink
                 to={path}
@@ -235,12 +237,13 @@ function Root() {
             </div>
           </header>
           <ErrorBox message={logout.error} />
-          <Routes>
+          <Suspense fallback={<Loading />}><Routes>
             <Route path="/quotations/products" element={<QuoteAdmin mode="products" />} />
             <Route path="/quotations/freight" element={<QuoteAdmin mode="freight" />} />
             <Route path="/quotations/settings" element={<QuoteAdmin mode="settings" />} />
             <Route path="/quotations/tasks" element={<QuoteTasks />} />
             <Route path="/supply" element={<SupplyChain />} />
+            <Route path="/supply/factories" element={user.role === "admin" ? <FactoryManager /> : <ErrorBox message="仅管理员可管理合作工厂" />} />
             <Route path="/supply/assigned" element={<FactoryOrders />} />
             <Route path="/factory/products" element={<FactoryProducts />} />
             <Route path="/factory/orders" element={<FactoryOrders />} />
@@ -284,7 +287,7 @@ function Root() {
               }
             />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
-          </Routes>
+          </Routes></Suspense>
         </main>
         {modal?.type === "add" && (
           <CustomerForm customer={null} close={close} />

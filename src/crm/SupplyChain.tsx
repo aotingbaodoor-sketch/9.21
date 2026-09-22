@@ -77,7 +77,7 @@ export function SupplyChain() {
     </>
   );
 }
-function FactoryManager() {
+export function FactoryManager() {
   const { revision, refresh, notify } = useSession(),
     factories = useResource<Factory[]>("/supply/factories", revision),
     m = useMutation(),

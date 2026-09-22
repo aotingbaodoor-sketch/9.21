@@ -19,6 +19,7 @@ export const packingSchema = z.object({
 export const productSchema = z.object({
   sku: z.string().trim().min(1).max(80), nameZh: z.string().trim().min(1).max(200), nameEn: z.string().trim().min(1).max(200), category: z.enum(categories), series: text,
   introduction: text, active: z.boolean().default(true), leadDays: z.number().int().min(0).max(1000).default(0),
+  imageIds: z.array(z.uuid()).max(12).default([]),
   minWidthMm: money.default(1), maxWidthMm: money.default(10000), minHeightMm: money.default(1), maxHeightMm: money.default(10000),
   minArea: money.default(0), pricing: z.enum(methods).default("area_options"), linearBasis: z.enum(["width", "height", "perimeter"]).default("perimeter"),
   prices: z.object({ factory: price, internal: price, guide: price, minimum: price, retail: price, special: price }).default({ factory: null, internal: null, guide: null, minimum: null, retail: null, special: null }),
