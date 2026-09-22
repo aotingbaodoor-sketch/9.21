@@ -18,4 +18,6 @@ COPY --from=builder /app/config/supabase-prod-ca.crt ./config/supabase-prod-ca.c
 USER node
 EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=5s CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3001)+'/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
-CMD ["node","build/server/index.js"]
+# Run additive, checksum-verified migrations even when the hosting provider ignores
+# legacy railway.json configuration. exec preserves graceful signal handling.
+CMD ["sh", "-c", "node build/scripts/migrate.js && exec node build/server/index.js"]

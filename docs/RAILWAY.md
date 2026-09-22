@@ -1,6 +1,8 @@
 # Railway 上线核对
 
-本项目使用 React/Vite + Express + PostgreSQL。`npm run build:crm` 是实际构建入口；Docker 包含 PDF 渲染所需 Chromium 和中文字体。`railway.json` 配置部署前增量迁移和数据库健康检查。
+本项目使用 React/Vite + Express + PostgreSQL。`npm run build:crm` 是实际构建入口；Docker 包含 PDF 渲染所需 Chromium 和中文字体。Docker 启动命令先执行增量迁移，成功后才启动服务。迁移使用事务锁和文件校验，不会重复执行已应用迁移；失败时不启动网站。
+
+Railway 已停用新服务对旧式 Config as Code 的支持，已有用户也将在 2026-12-01 停用。仓库中的 `railway.json` 仅保留给旧服务兼容使用，不能作为新服务配置成功的证明。新服务须核对控制台实际配置：Dockerfile 构建、使用 Docker 默认启动命令、健康检查路径 `/api/health`。若设置自定义启动命令，应使用 `sh -c 'node build/scripts/migrate.js && exec node build/server/index.js'`，不要绕过迁移。参考：[Railway 官方弃用说明](https://docs.railway.com/config-as-code)。
 
 ## 配置
 
