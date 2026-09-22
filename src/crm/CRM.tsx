@@ -127,7 +127,7 @@ function Root() {
       />
     );
   const { user, settings } = session,
-    specialist = ["technical", "logistics", "factory"].includes(user.role),
+    specialist = ["technical", "logistics", "factory", "coordinator"].includes(user.role),
     menus = [
       ["/dashboard", "工作台"],
       ["/customers", "客户管理"],
@@ -149,8 +149,9 @@ function Root() {
       ...(user.role !== "sales" ? [["/quotations/tasks", "报价审批 / 技术任务"]] : []),
       ...(["admin", "sales", "technical", "logistics"].includes(user.role) ? [["/supply", "订单供应链"]] : []),
       ...(user.role === "factory" ? [["/factory/products", "供货产品"], ["/factory/orders", "工厂订单"]] : []),
+      ...(["coordinator","technical","logistics"].includes(user.role) ? [["/supply/assigned", "我的跟单任务"]] : []),
       ...(user.role === "admin" ? [["/factory/products", "工厂产品审核"]] : []),
-    ].filter(([path]) => user.role === "factory" ? path.startsWith("/factory/") : !specialist || path.startsWith("/quotations/") || path === "/supply"),
+    ].filter(([path]) => user.role === "factory" ? path.startsWith("/factory/") : user.role === "coordinator" ? path.startsWith('/supply/') : !specialist || path.startsWith("/quotations/") || path.startsWith("/supply")),
     title =
       (menus.find(([path]) => location.pathname === path) ||
         menus.find(([path]) => location.pathname.startsWith(path)))?.[1] ||
@@ -240,10 +241,11 @@ function Root() {
             <Route path="/quotations/settings" element={<QuoteAdmin mode="settings" />} />
             <Route path="/quotations/tasks" element={<QuoteTasks />} />
             <Route path="/supply" element={<SupplyChain />} />
+            <Route path="/supply/assigned" element={<FactoryOrders />} />
             <Route path="/factory/products" element={<FactoryProducts />} />
             <Route path="/factory/orders" element={<FactoryOrders />} />
             <Route path="/quotations/:id" element={<QuoteProject />} />
-            <Route path="/dashboard" element={user.role === "factory" ? <Navigate to="/factory/products" replace /> : specialist ? <Navigate to="/quotations/tasks" replace /> : <Dashboard {...actions} />} />
+            <Route path="/dashboard" element={user.role === "factory" ? <Navigate to="/factory/products" replace /> : user.role === 'coordinator' ? <Navigate to="/supply/assigned" replace /> : specialist ? <Navigate to="/quotations/tasks" replace /> : <Dashboard {...actions} />} />
             <Route path="/customers" element={<Customers {...actions} />} />
             <Route
               path="/customers/:id"

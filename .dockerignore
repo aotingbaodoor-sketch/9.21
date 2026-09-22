@@ -9,3 +9,11 @@ dist
 build
 test-results
 playwright-report
+.next
+.npm-cache
+.learnings
+outputs
+docs/qa
+*.log
+*.pem
+*.key

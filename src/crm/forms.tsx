@@ -426,6 +426,7 @@ export function UserForm({
               <option value="sales">业务员</option>
               <option value="logistics">物流员</option>
               <option value="technical">技术员</option>
+              <option value="coordinator">跟单员</option>
               <option value="admin">管理员</option>
             </select>
           </Field>

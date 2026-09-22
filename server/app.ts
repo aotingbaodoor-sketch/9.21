@@ -99,7 +99,7 @@ export function createApp(pool: pg.Pool, options: Options) {
     }),
   );
   registerWhatsAppWebhook(app, whatsapp);
-  app.use(express.json({ limit: "3mb" }));
+  app.use(express.json({ limit: "12mb" }));
   app.use(cookieParser());
   app.use("/api", (_req, res, next) => {
     res.set("Cache-Control", "no-store");
@@ -260,8 +260,10 @@ export function createApp(pool: pg.Pool, options: Options) {
     res.json(value);
   };
   app.use("/api", (req, _res, next) => {
-    if (["logistics", "technical"].includes(req.actor.role) && !req.path.startsWith("/quoting/") && req.path !== "/profile")
+    if (["logistics", "technical"].includes(req.actor.role) && !req.path.startsWith("/quoting/") && !req.path.startsWith("/supply/") && req.path !== "/profile")
       throw new HttpError(403, "该岗位仅可访问已授权的报价任务");
+    if (req.actor.role === "coordinator" && !req.path.startsWith("/supply/") && req.path !== "/profile")
+      throw new HttpError(403, "跟单账号仅可访问已分配的供应链订单");
     if (req.actor.role === "factory" && !req.path.startsWith("/supply/") && req.path !== "/profile")
       throw new HttpError(403, "工厂账号仅可访问本工厂产品、订单和生产反馈");
     next();

@@ -33,12 +33,13 @@ function VersionLoader(props: { selected: string; detail: ProjectDetail; product
 }
 function QuoteEditor({ detail, products, freight, saved }: { detail: ProjectDetail; products: Product[]; freight: Freight[]; saved?: Version }) {
   const { refresh, notify } = useSession(), [, setQuery] = useSearchParams(), m = useMutation(), workflow = useMutation();
-  const [form, setForm] = useState<QuoteInput>(() => saved?.input || { ...initial(detail.project.name), country: "", lines: [] }), [reason, setReason] = useState(saved ? "" : "首次报价"), [preview, setPreview] = useState<PublicCalculation | null>(saved?.snapshot || null), [error, setError] = useState(""), [calculating, setCalculating] = useState(false), [catalogQ, setCatalogQ] = useState(""), [contact, setContact] = useState(""), [evidence, setEvidence] = useState(""), [kind, setKind] = useState("quotation"), [language, setLanguage] = useState("both"), [bundleName, setBundleName] = useState(""), [imported, setImported] = useState<{ lines: QuoteLine[]; errors: string[] } | null>(null);
+const [form, setForm] = useState<QuoteInput>(() => saved?.input || { ...initial(detail.project.name), country: "", lines: [] }), [reason, setReason] = useState(saved ? "" : "首次报价"), [calculatedPreview, setPreview] = useState<PublicCalculation | null>(saved?.snapshot || null), [error, setError] = useState(""), [calculating, setCalculating] = useState(false), [catalogQ, setCatalogQ] = useState(""), [contact, setContact] = useState(""), [evidence, setEvidence] = useState(""), [kind, setKind] = useState("quotation"), [language, setLanguage] = useState("both"), [bundleName, setBundleName] = useState(""), [imported, setImported] = useState<{ lines: QuoteLine[]; errors: string[] } | null>(null);
   const bundles = useResource<{ id: string; name: string; lines: QuoteLine[] }[]>("/quoting/bundles"), [extraRevision, setExtraRevision] = useState(0);
   const frozen = !!detail.order, changed = JSON.stringify(form) !== JSON.stringify(saved?.input);
+  const preview = !changed && saved ? saved.snapshot : calculatedPreview;
   useEffect(() => {
     let live = true;
-    if (saved && JSON.stringify(form) === JSON.stringify(saved.input)) { setPreview(saved.snapshot); setError(""); return; }
+    if (saved && JSON.stringify(form) === JSON.stringify(saved.input)) return;
     const timer = setTimeout(() => {
       const parsed = quoteInputSchema.safeParse(form);
       if (!parsed.success) { setPreview(null); setError("填写国家、有效日期和至少一个产品后可计算。"); return; }

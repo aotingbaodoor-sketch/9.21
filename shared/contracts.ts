@@ -102,7 +102,7 @@ export const userSchema = z
       .email()
       .max(200)
       .transform((v) => v.toLowerCase()),
-    role: z.enum(["admin", "sales", "logistics", "technical", "factory"]),
+    role: z.enum(["admin", "sales", "logistics", "technical", "factory", "coordinator"]),
     active: z.boolean().default(true),
     password: passwordSchema.optional(),
     version: z.number().int().positive().optional(),
@@ -134,7 +134,7 @@ export type User = {
   id: string;
   name: string;
   email: string;
-  role: "admin" | "sales" | "logistics" | "technical" | "factory";
+  role: "admin" | "sales" | "logistics" | "technical" | "factory" | "coordinator";
   active: boolean;
   version: number;
   avatar: string;

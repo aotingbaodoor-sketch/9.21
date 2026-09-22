@@ -1,6 +1,8 @@
 # Vercel 部署
 
-本项目已迁移为 Next.js：`pages/[[...slug]].tsx` 承接 CRM 前端路由，`pages/api/[...path].ts` 承接原有 Express API。Vercel 不需要、也不应配置浏览器端数据库密钥。
+当前正式构建是 **Vite + Express Node 服务**，不是已经验证的 Next.js/Vercel 部署。仓库保留 `pages/[[...slug]].tsx` 和 `pages/api/[...path].ts` 适配文件，但 `npm run build` 实际执行 `build:crm`。不能据此宣称 Vercel 可以直接上线。
+
+当前推荐按 `docs/RAILWAY.md` 部署完整 Node 容器，保留 PDF Chromium 渲染和 WhatsApp 后台任务。下列 Vercel 内容仅作为将来迁移的待验证参考；需要重新验证函数请求大小、PDF 浏览器运行时和独立后台任务后才能使用。
 
 ## Vercel 环境变量
 

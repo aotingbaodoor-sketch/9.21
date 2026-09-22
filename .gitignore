@@ -24,6 +24,10 @@ outputs/
 playwright-report/
 test-results/
 .legacy-source/
+*.pem
+*.key
+*.p12
+*.pfx
 dist
 dist-ssr
 *.local

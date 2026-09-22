@@ -2,34 +2,323 @@ import { useState } from "react";
 import { useMutation, useResource } from "./api.ts";
 import { useSession } from "./context.tsx";
 import { ErrorBox, Field, Loading, Panel } from "./ui.tsx";
+import { Purchase } from "./PurchaseWorkspace.tsx";
+export { Purchase } from "./PurchaseWorkspace.tsx";
 
-type Order={id:string;order_number:string;status:string;company:string;items:number;purchase_orders:number};
-type Factory={id:string;name:string;active:boolean;accounts?:number};
-type Item={id:string;line_key:string;quantity:number;configuration_snapshot:Record<string,unknown>};
-type Detail={order:Order;items:Item[];purchases:{id:string;order_number:string;status:string;factory_name:string;promised_date:string|null}[]};
-type PoDetail={order:{id:string;order_number:string;status:string;factory_name:string;version:number;promised_date:string|null;factory_confirmed_price:string|null;factory_confirmation_note:string};updates:{id:string;stage:string;quantity:number;note:string;author:string;created_at:string}[];issues:{id:string;severity:string;description:string;author:string}[];inspections:{id:string;status:string;note:string;inspector:string}[]};
-const stageNames:Record<string,string>={order_confirmed:"订单确认",drawing_confirmed:"图纸确认",materials:"材料采购",cutting:"开料",machining:"机加工",surface_treatment:"表面处理",assembly:"组装",glass:"玻璃生产",hardware:"五金安装",testing:"调试",quality:"质检",packing:"包装",ready_to_ship:"等待出货",shipped:"已出货"};
-const SupplyStatus=({value}:{value:string})=><span className="supply-status">{value}</span>;
+type Order = {
+  id: string;
+  order_number: string;
+  status: string;
+  company: string;
+  items: number;
+  purchase_orders: number;
+};
+type Factory = { id: string; name: string; active: boolean; accounts?: number };
+type Item = {
+  id: string;
+  line_key: string;
+  quantity: number;
+  configuration_snapshot: Record<string, unknown>;
+};
+type Detail = {
+  order: Order;
+  items: Item[];
+  purchases: {
+    id: string;
+    order_number: string;
+    status: string;
+    factory_name: string;
+    promised_date: string | null;
+  }[];
+};
+const SupplyStatus = ({ value }: { value: string }) => (
+  <span className="supply-status">{value}</span>
+);
 
-export function SupplyChain(){
-  const {user,revision}=useSession(),orders=useResource<Order[]>("/supply/orders",revision),[id,setId]=useState("");
-  if(orders.loading)return <Loading/>;
-  return <>
-    <Panel title="销售订单与供应链">
-      <p className="quote-help">销售订单只能由客户确认后的报价生成，确保产品、价格和图纸可追溯。管理员先建立合作工厂，再从订单中拆分产品。</p>
-      <ErrorBox message={orders.error}/>
-      <div className="supply-grid">{orders.data?.map(o=><button className="supply-card" key={o.id} onClick={()=>setId(o.id)}><b>{o.order_number}</b><span>{o.company}</span><SupplyStatus value={o.status}/><small>{o.items} 个产品 · {o.purchase_orders} 张工厂单</small></button>)}</div>
-      {!orders.data?.length&&<div className="supply-empty"><b>还没有销售订单</b><p>请先在“报价管理”创建并确认一份报价；客户确认后会自动生成订单，并在这里显示。</p></div>}
+export function SupplyChain() {
+  const { user, revision } = useSession(),
+    orders = useResource<Order[]>("/supply/orders", revision),
+    [id, setId] = useState("");
+  if (orders.loading) return <Loading />;
+  return (
+    <>
+      <Panel title="销售订单与供应链">
+        <p className="quote-help">
+          销售订单只能由客户确认后的报价生成，确保产品、价格和图纸可追溯。管理员先建立合作工厂，再从订单中拆分产品。
+        </p>
+        <ErrorBox message={orders.error} />
+        <div className="supply-grid">
+          {orders.data?.map((o) => (
+            <button
+              className="supply-card"
+              key={o.id}
+              onClick={() => setId(o.id)}
+            >
+              <b>{o.order_number}</b>
+              <span>{o.company}</span>
+              <SupplyStatus value={o.status} />
+              <small>
+                {o.items} 个产品 · {o.purchase_orders} 张工厂单
+              </small>
+            </button>
+          ))}
+        </div>
+        {!orders.data?.length && (
+          <div className="supply-empty">
+            <b>还没有销售订单</b>
+            <p>
+              请先在“报价管理”创建并确认一份报价；客户确认后会自动生成订单，并在这里显示。
+            </p>
+          </div>
+        )}
+      </Panel>
+      {user.role === "admin" && <FactoryManager />}
+      {id && <OrderView key={id} id={id} />}
+    </>
+  );
+}
+function FactoryManager() {
+  const { revision, refresh, notify } = useSession(),
+    factories = useResource<Factory[]>("/supply/factories", revision),
+    m = useMutation(),
+    [name, setName] = useState(""),
+    [person, setPerson] = useState(""),
+    [phone, setPhone] = useState(""),
+    [email, setEmail] = useState(""),
+    [selected, setSelected] = useState(""),
+    [accountName, setAccountName] = useState(""),
+    [accountEmail, setAccountEmail] = useState(""),
+    [password, setPassword] = useState("");
+  const save = () =>
+    void m.run(
+      "/supply/factories",
+      "POST",
+      { name, contact: { person, phone, email } },
+      () => {
+        setName("");
+        setPerson("");
+        setPhone("");
+        setEmail("");
+        refresh();
+        notify("合作工厂已建立，可用于订单拆分");
+      },
+    );
+  const invite = () =>
+    void m.run(
+      `/supply/factories/${selected}/invite`,
+      "POST",
+      { name: accountName, email: accountEmail, password },
+      () => {
+        setAccountName("");
+        setAccountEmail("");
+        setPassword("");
+        refresh();
+        notify("工厂独立账号已创建并绑定");
+      },
+    );
+  return (
+    <Panel title="合作工厂与账号管理">
+      <p className="quote-help">
+        先建立工厂，再为该工厂创建独立登录账号。工厂账号只能访问本工厂产品和采购订单。
+      </p>
+      <h3>新增合作工厂</h3>
+      <div className="supply-actions">
+        <Field label="工厂名称">
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="例如：奥汀堡门窗工厂"
+          />
+        </Field>
+        <Field label="联系人">
+          <input value={person} onChange={(e) => setPerson(e.target.value)} />
+        </Field>
+        <Field label="电话">
+          <input value={phone} onChange={(e) => setPhone(e.target.value)} />
+        </Field>
+        <Field label="邮箱">
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </Field>
+        <button
+          className="primary"
+          disabled={m.busy || name.trim().length < 2}
+          onClick={save}
+        >
+          新增合作工厂
+        </button>
+      </div>
+      <h3>邀请工厂账号</h3>
+      <div className="supply-actions">
+        <Field label="绑定工厂">
+          <select
+            value={selected}
+            onChange={(e) => setSelected(e.target.value)}
+          >
+            <option value="">请选择</option>
+            {factories.data
+              ?.filter((f) => f.active)
+              .map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+          </select>
+        </Field>
+        <Field label="账号姓名">
+          <input
+            value={accountName}
+            onChange={(e) => setAccountName(e.target.value)}
+          />
+        </Field>
+        <Field label="登录邮箱">
+          <input
+            type="email"
+            value={accountEmail}
+            onChange={(e) => setAccountEmail(e.target.value)}
+          />
+        </Field>
+        <Field label="初始密码（至少12位）">
+          <input
+            type="password"
+            minLength={12}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </Field>
+        <button
+          className="primary"
+          disabled={
+            m.busy ||
+            !selected ||
+            !accountName.trim() ||
+            !accountEmail.trim() ||
+            password.length < 12
+          }
+          onClick={invite}
+        >
+          创建并绑定账号
+        </button>
+      </div>
+      <ErrorBox message={m.error} />
+      <div className="supply-grid">
+        {factories.data?.map((f) => (
+          <div className="supply-card" key={f.id}>
+            <b>{f.name}</b>
+            <SupplyStatus value={f.active ? "启用" : "停用"} />
+            <small>{f.accounts || 0} 个已批准账号</small>
+          </div>
+        ))}
+      </div>
+      {!factories.data?.length && <p className="muted">尚未建立合作工厂。</p>}
     </Panel>
-    {user.role==="admin"&&<FactoryManager/>}
-    {id&&<OrderView key={`${id}:${revision}`} id={id}/>} 
-  </>;
+  );
 }
-function FactoryManager(){
-  const {revision,refresh,notify}=useSession(),factories=useResource<Factory[]>("/supply/factories",revision),m=useMutation(),[name,setName]=useState(""),[person,setPerson]=useState(""),[phone,setPhone]=useState(""),[email,setEmail]=useState(""),[selected,setSelected]=useState(""),[accountName,setAccountName]=useState(""),[accountEmail,setAccountEmail]=useState(""),[password,setPassword]=useState("");
-  const save=()=>void m.run("/supply/factories","POST",{name,contact:{person,phone,email}},()=>{setName("");setPerson("");setPhone("");setEmail("");refresh();notify("合作工厂已建立，可用于订单拆分");});
-  const invite=()=>void m.run(`/supply/factories/${selected}/invite`,"POST",{name:accountName,email:accountEmail,password},()=>{setAccountName("");setAccountEmail("");setPassword("");refresh();notify("工厂独立账号已创建并绑定");});
-  return <Panel title="合作工厂与账号管理"><p className="quote-help">先建立工厂，再为该工厂创建独立登录账号。工厂账号只能访问本工厂产品和采购订单。</p><h3>新增合作工厂</h3><div className="supply-actions"><Field label="工厂名称"><input value={name} onChange={e=>setName(e.target.value)} placeholder="例如：奥汀堡门窗工厂"/></Field><Field label="联系人"><input value={person} onChange={e=>setPerson(e.target.value)}/></Field><Field label="电话"><input value={phone} onChange={e=>setPhone(e.target.value)}/></Field><Field label="邮箱"><input type="email" value={email} onChange={e=>setEmail(e.target.value)}/></Field><button className="primary" disabled={m.busy||name.trim().length<2} onClick={save}>新增合作工厂</button></div><h3>邀请工厂账号</h3><div className="supply-actions"><Field label="绑定工厂"><select value={selected} onChange={e=>setSelected(e.target.value)}><option value="">请选择</option>{factories.data?.filter(f=>f.active).map(f=><option key={f.id} value={f.id}>{f.name}</option>)}</select></Field><Field label="账号姓名"><input value={accountName} onChange={e=>setAccountName(e.target.value)}/></Field><Field label="登录邮箱"><input type="email" value={accountEmail} onChange={e=>setAccountEmail(e.target.value)}/></Field><Field label="初始密码（至少12位）"><input type="password" minLength={12} value={password} onChange={e=>setPassword(e.target.value)}/></Field><button className="primary" disabled={m.busy||!selected||!accountName.trim()||!accountEmail.trim()||password.length<12} onClick={invite}>创建并绑定账号</button></div><ErrorBox message={m.error}/><div className="supply-grid">{factories.data?.map(f=><div className="supply-card" key={f.id}><b>{f.name}</b><SupplyStatus value={f.active?"启用":"停用"}/><small>{f.accounts||0} 个已批准账号</small></div>)}</div>{!factories.data?.length&&<p className="muted">尚未建立合作工厂。</p>}</Panel>;
+function OrderView({ id }: { id: string }) {
+  const { user, revision, refresh, notify } = useSession(),
+    d = useResource<Detail>(`/supply/orders/${id}`, revision),
+    factories = useResource<Factory[]>("/supply/factories", revision),
+    m = useMutation(),
+    [factory, setFactory] = useState(""),
+    [items, setItems] = useState<string[]>([]),
+    [date, setDate] = useState(""),
+    [po, setPo] = useState("");
+  if (d.loading) return <Loading />;
+  if (!d.data) return <ErrorBox message={d.error} />;
+  const x = d.data;
+  return (
+    <>
+      <Panel title={`${x.order.order_number} · ${x.order.company}`}>
+        <div className="supply-lines">
+          {x.items.map((i) => (
+            <label key={i.id}>
+              <input
+                type="checkbox"
+                disabled={user.role !== "admin"}
+                checked={items.includes(i.id)}
+                onChange={(e) =>
+                  setItems(
+                    e.target.checked
+                      ? [...items, i.id]
+                      : items.filter((v) => v !== i.id),
+                  )
+                }
+              />
+              <b>{i.line_key}</b> · {i.quantity} 件 ·{" "}
+              {String(i.configuration_snapshot.sku || "产品配置")}
+            </label>
+          ))}
+        </div>
+        {user.role === "admin" && (
+          <div className="supply-split">
+            <Field label="合作工厂">
+              <select
+                value={factory}
+                onChange={(e) => setFactory(e.target.value)}
+              >
+                <option value="">请选择</option>
+                {factories.data
+                  ?.filter((f) => f.active)
+                  .map((f) => (
+                    <option value={f.id} key={f.id}>
+                      {f.name}
+                    </option>
+                  ))}
+              </select>
+            </Field>
+            <Field label="承诺交期">
+              <input
+                type="date"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+              />
+            </Field>
+            <button
+              className="primary"
+              disabled={!factory || !items.length || m.busy}
+              onClick={() =>
+                void m.run(
+                  `/supply/orders/${id}/purchase-orders`,
+                  "POST",
+                  {
+                    factoryId: factory,
+                    itemIds: items,
+                    promisedDate: date || null,
+                  },
+                  () => {
+                    setItems([]);
+                    refresh();
+                    notify("已创建工厂采购订单");
+                  },
+                )
+              }
+            >
+              拆分工厂订单
+            </button>
+          </div>
+        )}
+        <ErrorBox message={m.error} />
+      </Panel>
+      <Panel title="工厂订单">
+        <div className="supply-grid">
+          {x.purchases.map((p) => (
+            <button
+              className="supply-card"
+              key={p.id}
+              onClick={() => setPo(p.id)}
+            >
+              <b>{p.order_number}</b>
+              <span>{p.factory_name}</span>
+              <SupplyStatus value={p.status} />
+              <small>交期：{p.promised_date || "待确认"}</small>
+            </button>
+          ))}
+        </div>
+      </Panel>
+      {po && <Purchase key={po} id={po} />}
+    </>
+  );
 }
-function OrderView({id}:{id:string}){const{user,revision,refresh,notify}=useSession(),d=useResource<Detail>(`/supply/orders/${id}`,revision),factories=useResource<Factory[]>("/supply/factories",revision),m=useMutation(),[factory,setFactory]=useState(""),[items,setItems]=useState<string[]>([]),[date,setDate]=useState(""),[po,setPo]=useState("");if(d.loading)return <Loading/>;if(!d.data)return <ErrorBox message={d.error}/>;const x=d.data;return <><Panel title={`${x.order.order_number} · ${x.order.company}`}><div className="supply-lines">{x.items.map(i=><label key={i.id}><input type="checkbox" disabled={user.role!=="admin"} checked={items.includes(i.id)} onChange={e=>setItems(e.target.checked?[...items,i.id]:items.filter(v=>v!==i.id))}/><b>{i.line_key}</b> · {i.quantity} 件 · {String(i.configuration_snapshot.sku||"产品配置")}</label>)}</div>{user.role==="admin"&&<div className="supply-split"><Field label="合作工厂"><select value={factory} onChange={e=>setFactory(e.target.value)}><option value="">请选择</option>{factories.data?.filter(f=>f.active).map(f=><option value={f.id} key={f.id}>{f.name}</option>)}</select></Field><Field label="承诺交期"><input type="date" value={date} onChange={e=>setDate(e.target.value)}/></Field><button className="primary" disabled={!factory||!items.length||m.busy} onClick={()=>void m.run(`/supply/orders/${id}/purchase-orders`,"POST",{factoryId:factory,itemIds:items,promisedDate:date||null},()=>{setItems([]);refresh();notify("已创建工厂采购订单");})}>拆分工厂订单</button></div>}<ErrorBox message={m.error}/></Panel><Panel title="工厂订单"><div className="supply-grid">{x.purchases.map(p=><button className="supply-card" key={p.id} onClick={()=>setPo(p.id)}><b>{p.order_number}</b><span>{p.factory_name}</span><SupplyStatus value={p.status}/><small>交期：{p.promised_date||"待确认"}</small></button>)}</div></Panel>{po&&<Purchase key={`${po}:${revision}`} id={po}/>}</>}
-export function Purchase({id}:{id:string}){const{user,revision,refresh,notify}=useSession(),d=useResource<PoDetail>(`/supply/purchase-orders/${id}`,revision),m=useMutation(),[stage,setStage]=useState("order_confirmed"),[quantity,setQuantity]=useState(0),[note,setNote]=useState(""),[severity,setSeverity]=useState("medium"),[issue,setIssue]=useState(""),[quality,setQuality]=useState("passed"),[price,setPrice]=useState(0),[promisedDate,setPromisedDate]=useState(""),editable=["admin","technical","factory"].includes(user.role);if(d.loading)return <Loading/>;if(!d.data)return <ErrorBox message={d.error}/>;const x=d.data;return <Panel title={`${x.order.order_number} · ${x.order.factory_name}`}><p>状态：<SupplyStatus value={x.order.status}/></p>{user.role==="factory"&&["draft","sent"].includes(x.order.status)&&<div className="supply-actions"><Field label="确认供货总价"><input type="number" min={0} step="0.01" value={price} onChange={e=>setPrice(Number(e.target.value))}/></Field><Field label="承诺交货日期"><input type="date" value={promisedDate} onChange={e=>setPromisedDate(e.target.value)}/></Field><Field label="接单说明"><input value={note} onChange={e=>setNote(e.target.value)}/></Field><button className="primary" disabled={!promisedDate||m.busy} onClick={()=>void m.run(`/supply/purchase-orders/${id}/confirm`,"POST",{price,promisedDate,note,version:x.order.version},()=>{setNote("");refresh();notify("已确认接单、价格和交期");})}>确认接单</button></div>}{editable&&<div className="supply-actions"><Field label="生产节点"><select value={stage} onChange={e=>setStage(e.target.value)}>{Object.entries(stageNames).map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></Field><Field label="完成数量"><input type="number" min={0} value={quantity} onChange={e=>setQuantity(Number(e.target.value))}/></Field><Field label="节点说明"><input value={note} onChange={e=>setNote(e.target.value)}/></Field><button disabled={m.busy} onClick={()=>void m.run(`/supply/purchase-orders/${id}/updates`,"POST",{stage,quantity,note,actualAt:new Date().toISOString(),plannedAt:null},()=>{setNote("");refresh();notify("生产进度已保存");})}>记录进度</button></div>}<h3>生产进度</h3>{x.updates.map(u=><div className="supply-event" key={u.id}><b>{stageNames[u.stage]||u.stage}</b> · {u.quantity} 件 · {u.author}<small>{u.note}</small></div>)}{editable&&<><h3>异常与质检</h3><div className="supply-actions"><Field label="异常等级"><select value={severity} onChange={e=>setSeverity(e.target.value)}><option>low</option><option>medium</option><option>high</option><option>critical</option></select></Field><Field label="异常说明"><input value={issue} onChange={e=>setIssue(e.target.value)}/></Field><button disabled={!issue.trim()||m.busy} onClick={()=>void m.run(`/supply/purchase-orders/${id}/issues`,"POST",{severity,description:issue},()=>{setIssue("");refresh();notify("生产异常已提交");})}>提交异常</button>{user.role!=="factory"&&<><Field label="质检结果"><select value={quality} onChange={e=>setQuality(e.target.value)}><option value="passed">通过</option><option value="conditional">有条件通过</option><option value="failed">不通过</option></select></Field><button disabled={m.busy} onClick={()=>void m.run(`/supply/purchase-orders/${id}/quality`,"POST",{status:quality,note},()=>{setNote("");refresh();notify("质检结果已保存");})}>保存质检</button></>}</div></>}<ErrorBox message={m.error}/>{x.issues.map(i=><div className="supply-event" key={i.id}><b>{i.severity}</b> · {i.description}<small>{i.author}</small></div>)}{x.inspections.map(i=><div className="supply-event" key={i.id}><b>质检：{i.status}</b><small>{i.note} · {i.inspector}</small></div>)}</Panel>}

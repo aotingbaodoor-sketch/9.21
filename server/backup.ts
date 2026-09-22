@@ -47,6 +47,11 @@ const tables = [
   "production_issues",
   "quality_inspections",
   "production_media",
+  "rework_tasks",
+  "shipment_packages",
+  "shipment_package_items",
+  "shipments",
+  "shipment_package_allocations",
 ] as const;
 type Snapshot = {
   format: "autinberg-backup-v1";
