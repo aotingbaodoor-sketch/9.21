@@ -32,9 +32,20 @@ async function start(){server=createApp(pool,{origin,serveStatic:true}).listen(4
 async function close(){await new Promise<void>((resolve,reject)=>server?server.close(e=>e?reject(e):resolve()):resolve());server=undefined;}
 const passed:string[]=[];const pass=(s:string)=>{passed.push(s);console.log("PASS "+s);};
 try{
- await postgres.initialise();await postgres.start();started=true;await postgres.createDatabase("quoting_test");await migrate(pool);
+await postgres.initialise();await postgres.start();started=true;await postgres.createDatabase("quoting_test");await pool.query("CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN;");await migrate(pool);
  const adminId=randomUUID();await pool.query("INSERT INTO users(id,name,email,password_hash,role) VALUES($1,'测试管理员','admin@test.invalid',$2,'admin')",[adminId,await hashPassword(password)]);await start();
  const admin=await login("admin@test.invalid");
+ const dataApi=await pool.connect();
+ try {
+  assert.equal((await dataApi.query("SELECT has_table_privilege('anon','public.users','select') AS allowed")).rows[0].allowed,false);
+  assert.equal((await dataApi.query("SELECT has_table_privilege('authenticated','public.customers','select') AS allowed")).rows[0].allowed,false);
+  await dataApi.query("BEGIN");
+  await dataApi.query("GRANT USAGE ON SCHEMA public TO anon");
+  await dataApi.query("GRANT SELECT ON public.users TO anon");
+  await dataApi.query("SET LOCAL ROLE anon");
+  assert.equal((await dataApi.query("SELECT count(*)::int AS total FROM users")).rows[0].total,0);
+ } finally {await dataApi.query("ROLLBACK");dataApi.release();}
+ pass("数据库匿名/前端认证角色无CRM表权限，即使误授予SELECT仍被RLS默认拒绝");
  for(const[name,role]of [["a","sales"],["b","sales"],["logistics","logistics"],["technical","technical"]])await ok(admin,"/team","POST",{name,email:`${name}@test.invalid`,role,password});
  const a=await login("a@test.invalid"),b=await login("b@test.invalid"),log=await login("logistics@test.invalid"),tech=await login("technical@test.invalid");
  const ca=await ok(admin,"/customers","POST",{company:"TEST Alpha",contact:"Test A",country:"UAE",grade:"A",ownerId:a.user.id}),cb=await ok(admin,"/customers","POST",{company:"TEST Beta Private",contact:"Test B",country:"UK",grade:"B",ownerId:b.user.id});

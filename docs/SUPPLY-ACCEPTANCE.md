@@ -9,7 +9,9 @@
 
 ## 实际运行结果
 
-`tests/quoting.integration.ts` 和 `tests/supply.scenario.ts` 使用独立临时 PostgreSQL 与随机密码运行，共 19 组通过。不会向真实业务库写入演示数据。
+`tests/quoting.integration.ts` 和 `tests/supply.scenario.ts` 使用独立临时 PostgreSQL 与随机密码运行，共 20 组通过。不会向真实业务库写入演示数据。
+
+增加数据库直接访问防护：仅针对CRM表启用RLS，撤销公共、anon和authenticated角色的直接权限。独立数据库中已验证，即使误授予匿名角色SELECT权限，也无法读取管理员记录。后端表所有者连接保留正常业务功能；服务端仍按员工角色和负责人授权。
 
 新增同一产品完整链路：工厂A自行录入供货产品/价格和计价规则 → 管理员核准销售价 → 销售A报价和SVG示意图 → 客户确认 → 销售订单拆分 → 工厂A接单 → 工厂A反馈和照片上传 → 跟单A审核 → 质检失败 → 工厂A提交返工 → 跟单A复核/复检 → 最终包装审核 → 两批发货 → 两次签收 → 订单关闭。
 

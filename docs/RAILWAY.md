@@ -7,7 +7,7 @@
 - 连接指定仓库 `aotingbaodoor-sketch/9.21`。不要授权无关仓库，不要把本机数据库复制到公网。
 - 在 Railway 服务的 Variables 中设置服务端 `DATABASE_URL`（Supabase 提供的 SSL 数据库连接串）、`APP_ORIGIN`（生成的 HTTPS 域名）、`NODE_ENV=production`、`HOST=0.0.0.0`。端口使用 Railway 注入的 `PORT`。
 - 密码和连接串仅存于服务端密钥设置，不使用 `VITE_` 或 `NEXT_PUBLIC_` 前缀，不提交 Git，也不发聊天。
-- 当前认证由服务端 Cookie、CSRF 和角色检查实现，并非 Supabase Auth。Supabase Data API 不应暴露 CRM 数据表；生产连接前需配置 RLS/授权并验证匿名访问被拒绝。
+- 当前认证由服务端 Cookie、CSRF 和角色检查实现，并非 Supabase Auth。迁移008为CRM表启用RLS并撤销公共、anon、authenticated权限；后端使用受信任的表所有者连接。Supabase项目应关闭Data API和自动公开新表，生产连接后还需复测实际匿名访问被拒绝。
 - 首位管理员通过 `node build/scripts/create-admin.js` 初始化，临时使用 `ADMIN_EMAIL`、`ADMIN_NAME`、`ADMIN_PASSWORD`，完成后移除密码变量。脚本拒绝覆盖已有管理员。
 - 不自动开通付费套餐，不自动启用 Meta 消息发送。真实产品价、汇率、货代价、银行信息由公司核实后填写。
 
