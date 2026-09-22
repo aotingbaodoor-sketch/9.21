@@ -1,0 +1,54 @@
+services:
+  db:
+    image: postgres:18-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: autinberg
+      POSTGRES_USER: autinberg
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U autinberg -d autinberg"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  app:
+    build: .
+    restart: unless-stopped
+    # 包括WHATSAPP_TOKEN_*，仅服务端容器读取；此文件不得提交Git。
+    env_file: .env.production
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      APP_ORIGIN: ${APP_ORIGIN:?Set APP_ORIGIN}
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3001
+      SESSION_HOURS: 12
+    depends_on:
+      db:
+        condition: service_healthy
+    command:
+      [
+        "sh",
+        "-c",
+        "node build/scripts/migrate.js && exec node build/server/index.js",
+      ]
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      CRM_HOST: ${CRM_HOST:?Set CRM_HOST}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
