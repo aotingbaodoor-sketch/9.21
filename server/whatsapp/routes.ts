@@ -7,6 +7,8 @@ import { transaction } from "../db.ts";
 import { hashToken, HttpError, requireAdmin, businessDay } from "../domain.ts";
 import * as repo from "../repository.ts";
 import { waRulesSchema, waSendSchema } from "../../shared/whatsapp.ts";
+import { setupChecks } from "./readiness.ts";
+import { verifyAppToken } from "./graph.ts";
 import {
   accounts,
   account,
@@ -113,6 +115,17 @@ export function registerWhatsAppRoutes(
     ).rows[0];
     const admin = req.actor.role === "admin";
     res.json({
+      ...(admin ? {
+        setupChecks: setupChecks(config),
+        messageEvidence: (await pool.query(`SELECT a.id AS "accountId",
+          count(m.id) FILTER (WHERE m.direction='inbound')::int AS "inboundCount",
+          count(m.id) FILTER (WHERE m.direction='outbound' AND m.whatsapp_message_id IS NOT NULL)::int AS "acceptedCount",
+          count(m.id) FILTER (WHERE m.direction='outbound' AND m.delivered_at IS NOT NULL)::int AS "deliveredCount",
+          max(m.message_timestamp) FILTER (WHERE m.direction='inbound') AS "lastInboundAt",
+          max(m.delivered_at) AS "lastDeliveredAt"
+          FROM whatsapp_accounts a LEFT JOIN whatsapp_messages m ON m.account_id=a.id
+          GROUP BY a.id ORDER BY a.created_at`)).rows,
+      } : {}),
       appId: config.appId,
       graphVersion: config.graphVersion,
       signupConfigId: config.signupConfigId,
@@ -214,20 +227,7 @@ export function registerWhatsAppRoutes(
     if (!session.rowCount)
       throw new HttpError(409, "授权会话已过期或已使用，请重新连接");
     const token = await graph.exchangeCode(input.code);
-    const debug = await graph.request<{
-      data: { is_valid: boolean; app_id: string; scopes: string[] };
-    }>(
-      `debug_token?input_token=${encodeURIComponent(token)}`,
-      config.appId + "|" + config.appSecret,
-    );
-    if (
-      !debug.data?.is_valid ||
-      debug.data.app_id !== config.appId ||
-      !["whatsapp_business_management", "whatsapp_business_messaging"].every(
-        (s) => debug.data.scopes?.includes(s),
-      )
-    )
-      throw new HttpError(403, "Meta授权与本应用或所需权限不匹配");
+    await verifyAppToken(graph, config, token);
     const phone = await verifyPhone(
       graph,
       input.wabaId,
@@ -458,10 +458,10 @@ export function registerWhatsAppRoutes(
   );
   app.get("/api/whatsapp/customers/:id/chat", async (req, res) => {
     const c = await repo.customer(pool, req.actor, String(req.params.id));
-    const visibility = req.actor.role === "admin" ? "TRUE" : "NOT v.conflict";
+    const visibility = req.actor.role === "admin" ? "TRUE" : "NOT v.conflict AND v.account_id IN (SELECT id FROM whatsapp_accounts WHERE provider='cloud' OR user_id=(SELECT owner_id FROM customers WHERE id=v.customer_id))";
     const conversations = (
       await pool.query(
-        `SELECT v.id,v.account_id AS "accountId",a.display_phone_number AS "displayPhoneNumber",v.wa_id AS "waId",a.user_id AS "userId",u.name AS "userName",v.last_inbound_at AS "lastInboundAt",v.conflict,a.connection_status AS "connectionStatus",u.active FROM whatsapp_conversations v JOIN whatsapp_accounts a ON a.id=v.account_id JOIN users u ON u.id=a.user_id WHERE v.customer_id=$1 AND ${visibility} ORDER BY v.first_message_at`,
+        `SELECT a.provider,v.id,v.account_id AS "accountId",a.display_phone_number AS "displayPhoneNumber",v.wa_id AS "waId",a.user_id AS "userId",u.name AS "userName",v.last_inbound_at AS "lastInboundAt",v.conflict,a.connection_status AS "connectionStatus",u.active FROM whatsapp_conversations v JOIN whatsapp_accounts a ON a.id=v.account_id JOIN users u ON u.id=a.user_id WHERE v.customer_id=$1 AND ${visibility} ORDER BY v.first_message_at`,
         [c.id],
       )
     ).rows.map((v) => ({
@@ -472,7 +472,7 @@ export function registerWhatsAppRoutes(
         v.active &&
         v.connectionStatus === "connected" &&
         (req.actor.role === "admin" || v.userId === req.actor.id),
-      windowOpen: windowOpen(v.lastInboundAt),
+      windowOpen: v.provider === 'linked' || windowOpen(v.lastInboundAt),
     }));
     const page = Math.max(1, Math.min(100000, Number(req.query.page) || 1)),
       limit = 50;
@@ -538,8 +538,9 @@ export function registerWhatsAppRoutes(
           403,
           "只能使用本人绑定且正常连接的WhatsApp号码发送",
         );
-      accountToken(a, config);
-      const open = windowOpen(v.last_inbound_at);
+      if (a.provider !== 'linked') accountToken(a, config);
+      if (a.provider === 'linked' && (input.templateId || input.replyToId)) throw new HttpError(400, '扫码模式当前仅支持普通文字回复');
+      const open = a.provider === 'linked' || windowOpen(v.last_inbound_at);
       if (!input.templateId && !open)
         throw new HttpError(409, "已超过24小时回复窗口，请选择已审核模板");
       let content: unknown = {},
@@ -649,7 +650,7 @@ export function registerWhatsAppRoutes(
           409,
           "仅明确发送失败的消息可重试；结果不明时请等待状态回执",
         );
-      if (m.message_type === "text" && !windowOpen(v.last_inbound_at))
+      if (a.provider !== 'linked' && m.message_type === "text" && !windowOpen(v.last_inbound_at))
         throw new HttpError(409, "回复窗口已结束，请改用审核模板");
       await db.query(
         "UPDATE whatsapp_messages SET delivery_status='queued',requested_by_id=$2,whatsapp_message_id=NULL,error_code=NULL,error_message=NULL,available_at=now(),locked_at=NULL WHERE id=$1",
@@ -894,7 +895,7 @@ export function registerWhatsAppRoutes(
     const s = repo.scope(req.actor, "c");
     const items = (
       await pool.query(
-        `SELECT c.id,coalesce(nullif(c.company,''),c.data->>'contact','WhatsApp新客户') AS name,c.owner_id AS "ownerId",c.version,c.last_contact_at AS "lastContactAt",c.wa_needs_assignment AS "needsAssignment",(SELECT m.text_content FROM whatsapp_messages m JOIN whatsapp_conversations v ON v.id=m.conversation_id WHERE m.customer_id=c.id AND ${req.actor.role === "admin" ? "TRUE" : "NOT v.conflict"} ORDER BY m.message_timestamp DESC LIMIT 1) AS preview FROM customers c WHERE c.wa_id IS NOT NULL AND c.deleted_at IS NULL AND ${s.sql} ORDER BY c.last_contact_at DESC LIMIT 100`,
+        `SELECT c.id,coalesce(nullif(c.company,''),c.data->>'contact','WhatsApp新客户') AS name,c.owner_id AS "ownerId",c.version,c.last_contact_at AS "lastContactAt",c.wa_needs_assignment AS "needsAssignment",(SELECT m.text_content FROM whatsapp_messages m JOIN whatsapp_conversations v ON v.id=m.conversation_id WHERE m.customer_id=c.id AND ${req.actor.role === "admin" ? "TRUE" : "NOT v.conflict AND v.account_id IN (SELECT id FROM whatsapp_accounts WHERE provider='cloud' OR user_id=c.owner_id)"} ORDER BY m.message_timestamp DESC LIMIT 1) AS preview FROM customers c WHERE c.wa_id IS NOT NULL AND c.deleted_at IS NULL AND ${s.sql} ORDER BY c.last_contact_at DESC LIMIT 100`,
         s.params,
       )
     ).rows;

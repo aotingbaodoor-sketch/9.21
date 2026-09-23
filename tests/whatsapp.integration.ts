@@ -25,6 +25,10 @@ import {
 import { MetaError, type GraphApi } from "../server/whatsapp/graph.ts";
 import type { User } from "../shared/contracts.ts";
 import type { WaChat } from "../shared/whatsapp.ts";
+import { EventEmitter } from 'node:events';
+import type makeWASocket from '@whiskeysockets/baileys';
+import { createLinkedWorker } from '../server/whatsapp/linked-worker.ts';
+import { linkedAuth, openLinked, sealLinked } from '../server/whatsapp/linked-auth.ts';
 
 // 独立PostgreSQL + 真实HTTP/会话/浏览器；仅Meta传输为注入式测试替身，不连接真实号码。
 const runId = randomUUID(),
@@ -479,6 +483,11 @@ try {
     /已绑定其他员工/,
   );
   const view = await ok(a, "/whatsapp/config");
+  assert.equal(view.setupChecks, undefined);
+  assert.equal(view.messageEvidence, undefined);
+  const adminReadiness = await ok(admin, "/whatsapp/config");
+  assert.ok(adminReadiness.setupChecks.some((c: { id: string }) => c.id === "app"));
+  assert.ok(adminReadiness.messageEvidence.every((e: { inboundCount: number; deliveredCount: number }) => e.inboundCount === 0 && e.deliveredCount === 0));
   assert.equal(view.accounts.length, 1);
   assert.equal(view.accounts[0].id, aa.id);
   assert.ok(
@@ -1078,6 +1087,8 @@ try {
   });
   await browserLogin(page, "admin@wa.invalid");
   await page.goto(origin + "/whatsapp/integration");
+  await expect(page.getByRole("heading", { name: "接入设置与真实验收" })).toBeVisible();
+  await expect(page.getByText("逐号码消息证据", { exact: true })).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "WhatsApp集成状态", exact: true }),
   ).toBeVisible();
@@ -1107,7 +1118,7 @@ try {
   await browserLogin(mp, "a@wa.invalid");
   await mp.goto(origin + "/whatsapp/account");
   await expect(
-    mp.getByRole("heading", { name: "我的WhatsApp", exact: true }),
+    mp.getByRole("heading", { name: "我的 WhatsApp · 扫码关联设备", exact: true }),
   ).toBeVisible();
   await expect(mp.getByText("永久Token", { exact: false })).toHaveCount(0);
   await mp.goto(origin + "/whatsapp");
@@ -1134,7 +1145,7 @@ try {
     mp
       .locator(".wa-message.outbound")
       .filter({ hasText: "Mobile quotation reply verified" }),
-  ).toContainText("已发送");
+  ).toContainText("平台已接收");
   assert.equal(
     await mp.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth + 1,
@@ -1213,6 +1224,77 @@ try {
     toUser(row),
   );
   pass("断开仅清除CRM凭据，不删除记录、不注销Meta号码；同员工可重新绑定");
+  // Baileys transport is a deterministic test double here, not a live-device claim.
+  process.env.WHATSAPP_ENCRYPTION_KEY=config.encryptionKey;
+  const linkedUser=(await ok(admin,'/team','POST',{name:'扫码测试销售',email:'linked@wa.invalid',password,role:'sales'})).id;
+  const linkedAgent=await login('linked@wa.invalid');
+  assert.equal((await request(linkedAgent,'/whatsapp/linked','POST',{action:'connect'})).status,400);
+  await ok(linkedAgent,'/whatsapp/linked','POST',{action:'connect',testAccountConfirmed:true});
+  assert.equal((await ok(b,'/whatsapp/linked')).status,'disconnected');
+  assert.equal((await request(b,'/whatsapp/linked','POST',{action:'connect',testAccountConfirmed:true,userId:linkedUser})).status,400);
+  const emitters: EventEmitter[]=[];
+  const socketFactory: typeof makeWASocket = (options)=>{
+    const events=new EventEmitter(); emitters.push(events);
+    const fake={
+      ev:events, user:{id:'12025550299@s.whatsapp.net'},
+      signalRepository:{lidMapping:{getPNForLID:async()=>null}},
+      end:()=>{}, logout:async()=>{},
+      sendMessage:async (_jid:string,_message:unknown,send:{messageId:string})=>{
+        events.emit('messages.update',[{key:{id:send.messageId,fromMe:true},update:{status:3}}]);
+        return {key:{id:send.messageId}};
+      }
+    };
+    assert.ok(options.auth?.creds.noiseKey.private);
+    return fake as unknown as ReturnType<typeof makeWASocket>;
+  };
+  let worker=createLinkedWorker(pool,config,socketFactory);
+  const until=async(check:()=>Promise<boolean>)=>{
+    for(let i=0;i<100;i++){ if(await check()) return; await new Promise(resolve=>setTimeout(resolve,20)); }
+    throw new Error('Linked test condition timed out');
+  };
+  try {
+    await worker.tick();
+    emitters[0].emit('creds.update',{});
+    emitters[0].emit('connection.update',{qr:'TEST-ONLY-NONSCANNABLE-CONTENT'});
+    await until(async()=>(await ok(linkedAgent,'/whatsapp/linked')).status==='qr');
+    const qrState=await ok(linkedAgent,'/whatsapp/linked');
+    assert.ok(qrState.qr.startsWith('data:image/png;base64,'));
+    assert.equal((await ok(b,'/whatsapp/linked')).qr,null);
+    const stored=(await pool.query('SELECT * FROM whatsapp_linked_auth WHERE user_id=$1',[linkedUser])).rows;
+    assert.ok(stored.length>0);
+    assert.ok(!JSON.stringify(stored).includes('private'));
+    const original=(await linkedAuth(pool,linkedUser,config)).state.creds.noiseKey.private;
+    assert.deepEqual((await linkedAuth(pool,linkedUser,config)).state.creds.noiseKey.private,original);
+    const sealed=sealLinked({s:'private-value'},linkedUser,'test','test',config);
+    assert.throws(()=>openLinked(sealed,bId,'test','test',config));
+    emitters[0].emit('connection.update',{connection:'open'});
+    await until(async()=>(await ok(linkedAgent,'/whatsapp/linked')).status==='connected');
+    const msg={key:{id:'test-linked-1',remoteJid:'447700900199@s.whatsapp.net',fromMe:false},message:{conversation:'Test linked text'},messageTimestamp:Math.floor(Date.now()/1000)};
+    emitters[0].emit('messages.upsert',{type:'notify',messages:[msg,msg]});
+    await until(async()=>(await pool.query('SELECT count(*)::int AS n FROM whatsapp_linked_events WHERE user_id=$1',[linkedUser])).rows[0].n===1);
+    await worker.tick();
+    const linkedCustomer=(await pool.query("SELECT * FROM customers WHERE wa_id='447700900199'")).rows[0];
+    assert.equal(linkedCustomer.owner_id,linkedUser);
+    assert.equal(linkedCustomer.data.contact,'');
+    const linkedChat=await chat(linkedAgent,linkedCustomer.id);
+    assert.equal(linkedChat.messages.length,1);
+    assert.equal((await request(b,`/whatsapp/customers/${linkedCustomer.id}/chat`)).status,404);
+    const reply=await ok(linkedAgent,'/whatsapp/send','POST',{conversationId:linkedChat.conversations[0].id,text:'Test manual reply'});
+    await worker.tick();
+    await until(async()=>(await pool.query('SELECT delivery_status FROM whatsapp_messages WHERE id=$1',[reply.id])).rows[0].delivery_status==='delivered');
+    await worker.stop();
+    worker=createLinkedWorker(pool,config,socketFactory);
+    await worker.tick();
+    assert.equal(emitters.length,2);
+    assert.deepEqual((await linkedAuth(pool,linkedUser,config)).state.creds.noiseKey.private,original);
+    emitters[1].emit('connection.update',{connection:'open'});
+    await until(async()=>(await ok(linkedAgent,'/whatsapp/linked')).status==='connected');
+    await ok(linkedAgent,'/whatsapp/linked','POST',{action:'logout'});
+    await worker.tick();
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM whatsapp_linked_auth WHERE user_id=$1',[linkedUser])).rows[0].n,0);
+    assert.equal((await chat(linkedAgent,linkedCustomer.id)).messages.length,2);
+    pass('扫码模式隔离测试：二维码仅本人可见、拒绝伪造员工ID、加密与防串号、重复消息去重、客户负责人、文字发送回执、重建worker恢复、退出保留聊天（传输为测试替身）');
+  } finally { await worker.stop(); delete process.env.WHATSAPP_ENCRYPTION_KEY; }
   await writeFile(
     path.join(root, "results.json"),
     JSON.stringify(

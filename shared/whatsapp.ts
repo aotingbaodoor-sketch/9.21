@@ -115,7 +115,10 @@ export type WaChat = {
     createdAt: string;
   }[];
 };
+export type WaSetupCheck = { id: string; label: string; configured: boolean; required: boolean; nextStep: string };
 export type WaConfigView = {
+  setupChecks?: WaSetupCheck[];
+  messageEvidence?: { accountId: string; inboundCount: number; acceptedCount: number; deliveredCount: number; lastInboundAt: string | null; lastDeliveredAt: string | null }[];
   appId: string;
   graphVersion: string;
   signupConfigId: string;

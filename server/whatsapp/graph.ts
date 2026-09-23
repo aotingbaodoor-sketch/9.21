@@ -28,6 +28,19 @@ export class MetaError extends HttpError {
     super(502, providerError(code));
   }
 }
+export async function verifyAppToken(graph: GraphApi, config: WaConfig, token: string) {
+  const result = await graph.request<{
+    data?: { is_valid?: boolean; app_id?: string; scopes?: string[]; expires_at?: number; data_access_expires_at?: number };
+  }>(`debug_token?input_token=${encodeURIComponent(token)}`, config.appId + "|" + config.appSecret);
+  const data = result.data;
+  const now = Date.now() / 1000;
+  if (!data?.is_valid || data.app_id !== config.appId ||
+      !["whatsapp_business_management", "whatsapp_business_messaging"].every(scope => data.scopes?.includes(scope)) ||
+      (data.expires_at && data.expires_at <= now) ||
+      (data.data_access_expires_at && data.data_access_expires_at <= now)) {
+    throw new HttpError(403, "Meta凭据无效、已过期，或不属于本CRM应用及所需WhatsApp权限");
+  }
+}
 export function graphApi(config: WaConfig): GraphApi {
   const base = () => {
     if (!/^v\d+\.\d+$/.test(config.graphVersion))

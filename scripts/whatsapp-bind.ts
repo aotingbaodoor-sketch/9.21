@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { database } from "../server/db.ts";
 import { waConfig, hasKey } from "../server/whatsapp/security.ts";
-import { graphApi } from "../server/whatsapp/graph.ts";
+import { graphApi, verifyAppToken } from "../server/whatsapp/graph.ts";
 import { bindAccount, verifyPhone } from "../server/whatsapp/service.ts";
 
 // 仅限部署管理员在服务器执行；Token值从环境变量读取，不接收命令行明文。
@@ -44,6 +44,7 @@ try {
     )
   ).rows[0];
   if (!user) throw new Error("绑定员工不存在或已停用");
+  await verifyAppToken(graph, config, token);
   const phone = await verifyPhone(graph, input.waba, input.phone, token);
   await graph.request(`${input.waba}/subscribed_apps`, token, "POST", {});
   const result = await bindAccount(

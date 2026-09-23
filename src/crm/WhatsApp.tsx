@@ -15,9 +15,10 @@ import { api, useMutation, useResource } from "./api.ts";
 import { useSession } from "./context.tsx";
 import { Empty, ErrorBox, Field, Loading, Pagination, Panel } from "./ui.tsx";
 import { embeddedSignup, loadMetaSdk } from "./whatsapp-signup.ts";
+import { LinkedWhatsApp } from './LinkedWhatsApp.tsx';
 
 const statusLabels: Record<string, string> = {
-  connected: "已连接",
+  connected: "已绑定（收发待验收）",
   disconnected: "已断开",
   error: "连接异常",
   unknown: "待确认",
@@ -30,7 +31,7 @@ const statusLabels: Record<string, string> = {
   failed: "失败",
   queued: "排队发送",
   sending: "发送中",
-  sent: "已发送",
+  sent: "平台已接收",
   delivered: "已送达",
   read: "已读",
   received: "已收到",
@@ -142,7 +143,7 @@ export function WhatsAppInbox() {
         {r.loading ? (
           <Loading />
         ) : !visible.length ? (
-          <Empty text="暂无WhatsApp询盘。完成官方接入后，新消息会自动创建客户。" />
+          <Empty text="暂无WhatsApp询盘。连接设备后，新消息会自动创建客户。" />
         ) : (
           <div className="wa-inbox">
             {visible.map((c) => (
@@ -175,6 +176,9 @@ function ConflictNotice() {
   ) : null;
 }
 export function MyWhatsApp() {
+  return <><LinkedWhatsApp /><details><summary>旧版官方 Cloud API 配置（保留，不作为扫码前提）</summary><CloudWhatsApp /></details></>;
+}
+function CloudWhatsApp() {
   const { revision } = useSession(),
     r = useResource<WaConfigView>("/whatsapp/config", revision, 15000);
   if (r.loading) return <Loading />;
@@ -188,7 +192,7 @@ export function MyWhatsApp() {
         </p>
         <ConnectAccount config={r.data} />
       </Panel>
-      {r.data.accounts.map((a) => (
+      {r.data.accounts.filter(a=>!a.phoneNumberId.startsWith('linked:')).map((a) => (
         <AccountCard key={a.id} account={a} />
       ))}
       {!r.data.accounts.length && (
@@ -523,6 +527,28 @@ export function WhatsAppIntegration() {
   const c = r.data;
   return (
     <>
+      <Panel title="接入设置与真实验收">
+        <p>页面可用 ≠ 后台已配置 ≠ 手机真实收发已通过。当前为单公司部署，员工共用公司的 Meta 应用，各自绑定获授权的业务号码。</p>
+        <ol>
+          {(c.setupChecks || []).map(check => <li key={check.id}>
+            <b>{check.label}：{check.configured ? "已配置" : check.required ? "缺失" : "可选，未配置"}</b>
+            <p>{check.nextStep}</p>
+          </li>)}
+        </ol>
+        <p>号码类型须先核实：普通 WhatsApp 不能直接扫码接入；Business 手机 App 号码须由 Meta 核实共存资格和影响；已有 Cloud API 号码优先由管理员绑定。本系统不会自动注册、注销或迁移号码，不同步全部历史聊天。</p>
+        <a href="https://developers.facebook.com/apps/" target="_blank" rel="noreferrer">打开 Meta 官方应用控制台 ↗</a>
+        <h3>逐号码消息证据</h3>
+        {(c.messageEvidence || []).length === 0 ? <Empty text="尚无绑定号码，未开始真实收发验收" /> : (c.messageEvidence || []).map(e => {
+          const a = c.accounts.find(account => account.id === e.accountId);
+          return <div key={e.accountId} className="wa-warning">
+            <b>{a?.displayPhoneNumber || "业务号码"} · {a?.userName}</b>
+            <p>已保存入站：{e.inboundCount}；平台已接收回复：{e.acceptedCount}；已送达回执：{e.deliveredCount}</p>
+            <p>最近入站：{date(e.lastInboundAt)}；最近送达：{date(e.lastDeliveredAt)}</p>
+            <small>这些是服务端记录，不区分 Meta 测试事件与人工手机验收。仍须测试手机确认收发、客户归属和双员工隔离；历史成功不代表当前凭据仍有效。</small>
+          </div>;
+        })}
+        <p className="muted">当前自动回复未启用，所有外发均需人工操作；不会自动承诺价格、交期或合同。图片／PDF外发和聊天建询价尚待补齐，不能仅凭本页宣布全部接通。</p>
+      </Panel>
       <Panel
         title="WhatsApp集成状态"
         action={<Link to="/whatsapp/account">号码连接管理 →</Link>}

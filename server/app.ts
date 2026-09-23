@@ -37,6 +37,7 @@ import {
 } from "./whatsapp/routes.ts";
 import { registerQuoting } from "./quoting/routes.ts";
 import { registerSupplyRoutes } from "./supply/routes.ts";
+import { registerLinkedRoutes } from "./whatsapp/linked-routes.ts";
 
 declare global {
   namespace Express {
@@ -269,6 +270,7 @@ export function createApp(pool: pg.Pool, options: Options) {
     next();
   });
   registerWhatsAppRoutes(app, whatsapp, mutate);
+  registerLinkedRoutes(app, pool, mutate);
   registerQuoting(app, pool, mutate);
   registerSupplyRoutes(app, pool, mutate);
   app.get("/api/customers", async (req, res) =>

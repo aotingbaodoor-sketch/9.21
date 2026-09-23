@@ -26,6 +26,7 @@ const object = (v: unknown): Json =>
 const array = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 export type AccountRow = {
+  provider: 'cloud' | 'linked';
   id: string;
   user_id: string;
   waba_id: string;
@@ -216,7 +217,7 @@ export async function conversation(
   const s = repo.scope(user, "c", 2);
   const row = (
     await db.query(
-      `SELECT v.*,c.owner_id,c.deleted_at,c.wa_needs_assignment,a.phone_number_id,a.user_id AS account_user_id,a.connection_status,u.active AS account_active FROM whatsapp_conversations v JOIN customers c ON c.id=v.customer_id JOIN whatsapp_accounts a ON a.id=v.account_id JOIN users u ON u.id=a.user_id WHERE v.id::text=$1 AND ${s.sql} AND c.deleted_at IS NULL ${user.role === "sales" ? "AND NOT v.conflict" : ""} ${lock ? "FOR UPDATE OF v,c" : ""}`,
+      `SELECT v.*,c.owner_id,c.deleted_at,c.wa_needs_assignment,a.phone_number_id,a.user_id AS account_user_id,a.connection_status,u.active AS account_active FROM whatsapp_conversations v JOIN customers c ON c.id=v.customer_id JOIN whatsapp_accounts a ON a.id=v.account_id JOIN users u ON u.id=a.user_id WHERE v.id::text=$1 AND ${s.sql} AND c.deleted_at IS NULL ${user.role === "sales" ? "AND NOT v.conflict AND (a.provider<>'linked' OR a.user_id=c.owner_id)" : ""} ${lock ? "FOR UPDATE OF v,c" : ""}`,
       [id, ...s.params],
     )
   ).rows[0];
@@ -366,7 +367,7 @@ export function createWhatsAppService(
         : await activeAdmin();
       const data = customerSchema.parse({
         company: "WhatsApp占位校验",
-        contact: str(profile.name) || "WhatsApp新客户",
+        contact: str(profile.name),
         whatsapp: waId,
         phone: "+" + waId,
         source: "WhatsApp自动录入",
@@ -406,6 +407,7 @@ export function createWhatsAppService(
     ).rows[0];
     let conflict =
       !!existingConversation?.conflict ||
+      (accountRow.provider === 'linked' && customer.owner_id !== accountRow.user_id) ||
       ambiguous ||
       !!customer.deleted_at ||
       (!existingConversation &&
@@ -763,7 +765,7 @@ export function createWhatsAppService(
     for (let i = 0; i < limit; i++) {
       const m = (
         await pool.query(
-          "UPDATE whatsapp_messages SET delivery_status='sending',locked_at=now(),attempts=attempts+1 WHERE id=(SELECT id FROM whatsapp_messages WHERE direction='outbound' AND delivery_status='queued' AND available_at<=now() ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *",
+          "UPDATE whatsapp_messages SET delivery_status='sending',locked_at=now(),attempts=attempts+1 WHERE id=(SELECT m.id FROM whatsapp_messages m JOIN whatsapp_accounts a ON a.id=m.account_id WHERE a.provider='cloud' AND direction='outbound' AND delivery_status='queued' AND available_at<=now() ORDER BY m.created_at FOR UPDATE OF m SKIP LOCKED LIMIT 1) RETURNING *",
         )
       ).rows[0];
       if (!m) break;
