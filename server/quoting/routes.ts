@@ -37,10 +37,14 @@ async function quote(db: Db, actor: User, quoteId: string, lock = false) {
   return { q: current, p };
 }
 async function compute(db: Db, actor: User, p: Project, input: QuoteInput) {
-  const [{ data: settings }, products, rates, crm] = await Promise.all([
-    getQuoteSettings(db), db.query("SELECT id,data,version FROM quotation_products WHERE id=ANY($1::uuid[])", [input.lines.map(l => l.productId)]),
-    input.freightId ? db.query("SELECT id,data,version FROM quotation_freight WHERE id=$1", [input.freightId]) : Promise.resolve({ rows: [] }), repo.settings(db),
-  ]);
+  // A transaction owns one client: finish each query before starting the next.
+  // Keep these reads on that client rather than escaping the transaction via the pool.
+  const { data: settings } = await getQuoteSettings(db);
+  const products = await db.query("SELECT id,data,version FROM quotation_products WHERE id=ANY($1::uuid[])", [input.lines.map(l => l.productId)]);
+  const rates = input.freightId
+    ? await db.query("SELECT id,data,version FROM quotation_freight WHERE id=$1", [input.freightId])
+    : { rows: [] };
+  const crm = await repo.settings(db);
   const c = calculate(input, products.rows.map(r => ({ ...r.data, id: r.id, version: r.version })) as Product[], rates.rows[0] ? { ...rates.rows[0].data, id: rates.rows[0].id, version: rates.rows[0].version } as Freight : null, settings, policy(settings, actor), businessDay(crm.timezone), p.id);
   return c;
 }

@@ -18,6 +18,12 @@ import {catalogUi} from "./catalog.ui.ts";
 import type {QuoteInput} from "../shared/quoting.ts";
 import type {User} from "../shared/contracts.ts";
 
+const concurrentQueryWarnings: string[] = [];
+const trackQueryWarning = (warning: Error) => {
+ if (warning.message.includes("client.query() when the client is already executing")) concurrentQueryWarnings.push(warning.message);
+};
+process.on("warning", trackQueryWarning);
+
 const runId=randomUUID(),password=randomBytes(24).toString("base64url"),dbPassword=randomBytes(24).toString("hex"),root=path.join(os.tmpdir(),"autinberg-quoting",runId),origin="http://127.0.0.1:4599";
 const artifacts=process.env.ARTIFACT_DIR||path.join(root,"artifacts");await mkdir(artifacts,{recursive:true});
 const postgres=await localPostgres({databaseDir:path.join(root,"postgres"),port:55579,user:"postgres",password:dbPassword,persistent:true,authMethod:"scram-sha-256",initdbFlags:["--encoding=UTF8","--locale=C"],postgresFlags:["-h","127.0.0.1"],onLog:()=>{},onError:()=>{}});
@@ -98,5 +104,7 @@ const blank=await readFile(path.resolve("public/templates/quotation-lines.xlsx")
  await browser.close();browser=undefined;await close();await pool.end();await postgres.stop();await postgres.start();pool=database(url);await start();assert.equal((await get(v1)).snapshot.total,700.62);assert.deepEqual(await ok(a,`/quoting/documents/${en}`),pdf);pass("重启应用与PostgreSQL后报价、会话及PDF内容保持");
  const archive=await backup(pool);await postgres.createDatabase("quoting_restore");const restored=database(url.replace("quoting_test","quoting_restore"));await migrate(restored);const counts=await restore(restored,archive);assert.equal(counts.quotation_documents,4);assert.equal(counts.factory_product_images,3);assert.deepEqual((await restored.query("SELECT id,sha256,bytes_base64 FROM factory_product_images ORDER BY id")).rows,(await pool.query("SELECT id,sha256,bytes_base64 FROM factory_product_images ORDER BY id")).rows);assert.equal((await restored.query("SELECT bytes_base64 FROM quotation_documents WHERE id=$1",[en])).rows[0].bytes_base64,pdf.toString("base64"));await assert.rejects(restore(restored,archive),/不是空库/);await restored.end();pass("独立空数据库恢复报价、订单、审批及4份PDF，拒绝覆盖非空库");
  await ok(admin,`/team/${a.user.id}`,"PUT",{name:a.user.name,email:a.user.email,role:"sales",active:false,version:1});assert.equal((await request(a,`/quoting/documents/${en}`)).status,401);pass("停用员工后旧会话不能访问报价或PDF");
+ await new Promise<void>(resolve => setImmediate(resolve));
+ assert.deepEqual(concurrentQueryWarnings, [], "事务连接不得并发执行查询");pass("报价和供应链事务不存在同连接并发查询警告");
  await writeFile(path.join(artifacts,"results.json"),JSON.stringify({passed,artifacts},null,2));console.log(`QUOTING QA: ${passed.length} groups passed. Artifacts: ${artifacts}`);
-}finally{await browser?.close();await close();await pool.end();if(started)await postgres.stop();}
+}finally{process.off("warning", trackQueryWarning);await browser?.close();await close();await pool.end();if(started)await postgres.stop();}
