@@ -20,6 +20,7 @@
     "db:backup": "node --env-file-if-exists=.env --import tsx scripts/backup.ts backup",
     "db:restore": "node --env-file-if-exists=.env --import tsx scripts/backup.ts restore",
     "test": "node --import tsx --test tests/domain.test.ts",
+    "test:customer-codes": "node --import tsx --test tests/customer-codes.test.ts && node --import tsx tests/customer-codes.integration.ts",
     "test:integration": "node --import tsx tests/integration.ts",
     "whatsapp:bind": "node --env-file-if-exists=.env --import tsx scripts/whatsapp-bind.ts",
     "test:whatsapp": "node --import tsx --test tests/whatsapp-readiness.test.ts && node --import tsx tests/whatsapp.integration.ts"

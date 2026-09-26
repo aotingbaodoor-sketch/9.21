@@ -4,8 +4,13 @@ import { hashToken } from "./domain.ts";
 // 会话和限流缓存不恢复；恢复后所有用户重新登录。包含密码哈希，备份必须离线加密保存。
 const tables = [
   "users",
+  "crm_partner_counters",
+  "crm_partners",
+  "crm_customer_code_counters",
   "settings",
   "customers",
+  "crm_customer_code_ledger",
+  "crm_customer_code_reviews",
   "follow_up_records",
   "notifications",
   "notification_reads",
