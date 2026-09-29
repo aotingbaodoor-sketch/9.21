@@ -38,6 +38,7 @@ import {
 import { registerQuoting } from "./quoting/routes.ts";
 import { registerSupplyRoutes } from "./supply/routes.ts";
 import { registerLinkedRoutes } from "./whatsapp/linked-routes.ts";
+import { runtimeConfig } from './document-registry.ts';
 
 declare global {
   namespace Express {
@@ -608,6 +609,27 @@ export function createApp(pool: pg.Pool, options: Options) {
   app.get("/api/settings", async (_req, res) =>
     res.json(await repo.settings(pool)),
   );
+  app.get('/api/settings/workflow', async (req,res) => {
+    requireAdmin(req.actor);
+    res.json(await runtimeConfig(pool));
+  });
+  app.put('/api/settings/workflow',async(req,res)=>mutate(req,res,async db=>{
+    requireAdmin(req.actor);
+    const input=z.object({
+      sla_assign_minutes:z.number().int().positive(),
+      sla_first_reply_minutes:z.number().int().positive(),
+      sla_quote_followup_hours:z.number().int().positive(),
+      sla_deposit_reminder_days:z.number().int().positive(),
+      sla_aftersale_first_hours:z.number().int().positive(),
+      sla_production_inquiry_days:z.number().int().positive(),
+      escalation_after_breach:z.enum(['notify_manager','none']),
+    }).strict().parse(req.body);
+    await db.query('SELECT key FROM crm_runtime_config ORDER BY key FOR UPDATE');
+    const before=await runtimeConfig(db);
+    for(const [key,value] of Object.entries(input)) await db.query('UPDATE crm_runtime_config SET value=$2,updated_by=$3,updated_at=now() WHERE key=$1',[key,JSON.stringify(value),req.actor.id]);
+    await repo.audit(db,req.actor,'修改工作流时限','workflow-config',{before,after:input});
+    return runtimeConfig(db);
+  }));
   app.put("/api/settings", async (req, res) =>
     mutate(req, res, async (db) => {
       requireAdmin(req.actor);

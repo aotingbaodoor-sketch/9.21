@@ -11,6 +11,11 @@ const tables = [
   "customers",
   "crm_customer_code_ledger",
   "crm_customer_code_reviews",
+  "crm_document_class",
+  "crm_document_sequence",
+  "crm_document_registry",
+  "crm_document_customer_link",
+  "crm_runtime_config",
   "follow_up_records",
   "notifications",
   "notification_reads",
@@ -114,7 +119,7 @@ export async function restore(
     )
       throw new Error("迁移版本与备份不一致，请使用对应版本代码恢复");
     for (const name of tables.filter(
-      (n) => n !== "settings" && n !== "whatsapp_settings" && n !== "quotation_settings",
+      (n) => !["settings","whatsapp_settings","quotation_settings","crm_document_class","crm_runtime_config"].includes(n),
     ))
       if ((await db.query(`SELECT 1 FROM ${name} LIMIT 1`)).rowCount)
         throw new Error(
@@ -136,10 +141,11 @@ export async function restore(
         const keys = Object.keys(row);
         if (!keys.length || keys.some((k) => !columns.has(k)))
           throw new Error("备份字段无效");
+        const seedKey = name === 'crm_document_class' ? 'code' : name === 'crm_runtime_config' ? 'key' : 'id';
         const onConflict =
-          name === "settings" || name === "whatsapp_settings" || name === "quotation_settings"
-            ? ` ON CONFLICT(id) DO UPDATE SET ${keys
-                .filter((k) => k !== "id")
+          ["settings","whatsapp_settings","quotation_settings","crm_document_class","crm_runtime_config"].includes(name)
+            ? ` ON CONFLICT(${seedKey}) DO UPDATE SET ${keys
+                .filter((k) => k !== seedKey)
                 .map((k) => `"${k}"=EXCLUDED."${k}"`)
                 .join(",")}`
             : "";

@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "test:codespec": "node --import tsx tests/coding-contract.acceptance.ts tests/fixtures/delivery-20260928/autinberg-coding-tests.v1.json",
     "postinstall": "node scripts/silence-signal-logs.mjs",
     "dev": "npm run dev:crm",
     "build": "npm run build:crm",

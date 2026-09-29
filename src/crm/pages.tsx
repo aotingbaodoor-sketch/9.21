@@ -23,6 +23,7 @@ import {
   Status,
 } from "./ui.tsx";
 import { UserForm } from "./forms.tsx";
+import { WorkflowSettings } from './WorkflowSettings.tsx';
 import {
   WhatsAppAnalytics,
   WhatsAppChat,
@@ -779,6 +780,7 @@ export function SettingsPage() {
         <SystemSettings key={settings.version} config={settings} />
       )}
       <Profile key={user.version} />
+      {user.role === 'admin' && <WorkflowSettings />}
       <Panel title="我的 WhatsApp">
         <p>连接个人工作号码，查看授权状态、同步模板与处理连接异常。</p>
         <Link to="/whatsapp/account">管理我的 WhatsApp →</Link>

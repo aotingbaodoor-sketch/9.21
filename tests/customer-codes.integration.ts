@@ -7,6 +7,10 @@ import { database, migrate, transaction } from '../server/db.ts';
 import { backup, restore } from '../server/backup.ts';
 import { allocatePartner, allocateCustomerCode } from '../server/customer-code-store.ts';
 import { localPostgres } from '../scripts/postgres-runtime.ts';
+import { registerDocument, runtimeConfig } from '../server/document-registry.ts';
+import { createApp } from '../server/app.ts';
+import { hashPassword } from '../server/domain.ts';
+import type { Server } from 'node:http';
 
 const root=path.join(os.tmpdir(),'autinberg-customer-code-test',randomUUID());
 const secret=randomBytes(32).toString('hex');
@@ -16,6 +20,7 @@ const pg=await localPostgres({databaseDir:path.join(root,'postgres'),port,user:'
 const pool=database(`postgresql://postgres:${secret}@127.0.0.1:${port}/codes_test`);
 const restored=database(`postgresql://postgres:${secret}@127.0.0.1:${port}/codes_restore`);
 let started=false;
+let http: Server | undefined;
 try {
   await pg.initialise(); await pg.start(); started=true;
   await pg.createDatabase('codes_test'); await pg.createDatabase('codes_restore');
@@ -70,8 +75,53 @@ try {
   await assert.rejects(assign(pending,'2026-09-27'),/999上限/);
   await assert.rejects(transaction(pool,async db=>{ await db.query('SET LOCAL ROLE anon'); await db.query('SELECT * FROM crm_customer_code_ledger'); }),/permission denied/);
   await assert.rejects(transaction(pool,async db=>{ await db.query('SET LOCAL ROLE authenticated'); await db.query("SELECT crm_allocate_customer_code($1,$2,'2026-09-26','new')",[pending,partner.id]); }),/permission denied/);
+  let persisted=0;
+  const documentInput={classCode:'QT',customerIds:[one],date:'2026-09-26',businessKind:'acceptance-isolated-quote',businessId:randomUUID(),requestKey:randomUUID(),actorId:user};
+  const write=async()=>{persisted++;};
+  const repeatedDocuments=await Promise.all(Array.from({length:20},()=>registerDocument(pool,documentInput,write)));
+  assert.equal(new Set(repeatedDocuments.map(d=>d.doc_no)).size,1);
+  assert.equal(persisted,1);
+  assert.equal(repeatedDocuments[0].doc_no,'A001260926045-QT001');
+  await assert.rejects(registerDocument(pool,{...documentInput,date:'2026-09-27'},write),/重复请求内容不一致/);
+  const parallelDocuments=await Promise.all(Array.from({length:20},()=>registerDocument(pool,{...documentInput,businessId:randomUUID(),requestKey:randomUUID()},write)));
+  assert.equal(new Set(parallelDocuments.map(d=>d.doc_no)).size,20);
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM crm_document_registry')).rows[0].n,21);
+  await assert.rejects(pool.query('DELETE FROM crm_document_registry WHERE id=$1',[repeatedDocuments[0].id]),/不可修改/);
+  await assert.rejects(registerDocument(pool,{...documentInput,classCode:'AR',customerIds:[],businessId:randomUUID(),requestKey:randomUUID()},write),/必须关联一个客户/);
+  const multi=await registerDocument(pool,{...documentInput,classCode:'PO',customerIds:[one,ids[0]],businessId:randomUUID(),requestKey:randomUUID()},write);
+  assert.equal(multi.doc_no,'PO2609260001');
+  for(const id of [one,ids[0]]) assert.equal((await pool.query('SELECT document_id FROM crm_document_customer_link WHERE customer_id=$1 AND document_id=$2',[id,multi.id])).rowCount,1);
+  const failed={...documentInput,classCode:'CI',businessId:randomUUID(),requestKey:randomUUID()};
+  await assert.rejects(registerDocument(pool,failed,async()=>{throw new Error('business insert rolled back');}),/rolled back/);
+  assert.equal((await pool.query('SELECT 1 FROM crm_document_registry WHERE request_key=$1',[failed.requestKey])).rowCount,0);
+  assert.equal((await registerDocument(pool,failed,write)).doc_no,'A001260926045-CI001');
+  assert.equal((await runtimeConfig(pool)).sla_assign_minutes,30);
+  await pool.query("UPDATE crm_runtime_config SET value='45' WHERE key='sla_assign_minutes'");
+  assert.equal((await runtimeConfig(pool)).sla_assign_minutes,45);
+  await assert.rejects(pool.query("UPDATE crm_runtime_config SET value='\"auto_reassign\"' WHERE key='escalation_after_breach'"),/check constraint/);
+  await pool.query("UPDATE users SET role=CASE WHEN id=$1 THEN 'admin' ELSE role END,password_hash=$2 WHERE id=ANY($3::uuid[])",[user,await hashPassword(secret),[user,other]]);
+  const origin='http://127.0.0.1:4691';
+  http=await new Promise<Server>(resolve=>{const server=createApp(pool,{origin}).listen(4691,'127.0.0.1',()=>resolve(server));});
+  async function login(email:string) {
+    const response=await fetch(origin+'/api/auth/login',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({email,password:secret})});
+    assert.equal(response.status,200);
+    const data=await response.json() as {csrf:string};
+    return {Cookie:response.headers.get('set-cookie')!.split(';')[0],'X-CSRF-Token':data.csrf,Origin:origin,'Content-Type':'application/json','Idempotency-Key':randomUUID()};
+  }
+  const adminHeaders=await login('codes@test.invalid'), salesHeaders=await login('codes2@test.invalid');
+  assert.equal((await fetch(origin+'/api/settings/workflow',{headers:salesHeaders})).status,403);
+  const config=await runtimeConfig(pool), changed={...config,sla_assign_minutes:30,sla_first_reply_minutes:31};
+  assert.equal((await fetch(origin+'/api/settings/workflow',{method:'PUT',headers:salesHeaders,body:JSON.stringify(changed)})).status,403);
+  for(let i=0;i<2;i++) assert.equal((await fetch(origin+'/api/settings/workflow',{method:'PUT',headers:adminHeaders,body:JSON.stringify(changed)})).status,200);
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM audit_logs WHERE action='修改工作流时限'")).rows[0].n,1);
+  assert.equal((await runtimeConfig(pool)).sla_first_reply_minutes,31);
+  const audit=(await pool.query("SELECT details FROM audit_logs WHERE action='修改工作流时限'")).rows[0].details;
+  assert.equal(audit.before.sla_assign_minutes,45); assert.equal(audit.after.sla_assign_minutes,30);
+  await pool.query("UPDATE crm_runtime_config SET value='45' WHERE key='sla_assign_minutes'");
   const archive=await backup(pool);
   await restore(restored,archive);
+  assert.equal((await restored.query('SELECT count(*)::int AS n FROM crm_document_registry')).rows[0].n,23);
+  assert.equal((await runtimeConfig(restored)).sla_assign_minutes,45);
   assert.equal((await restored.query('SELECT crm_customer_code FROM customers WHERE id=$1',[one])).rows[0].crm_customer_code,repeats[0]);
   assert.equal((await restored.query('SELECT count(*)::int AS n FROM crm_customer_code_ledger')).rows[0].n,45);
   await assert.rejects(restore(restored,archive),/不是空库/);
@@ -79,6 +129,8 @@ try {
   assert.equal(recovered,'A001260926046');
   console.log('PASS PostgreSQL: permanent codes, soft deletion, reassignment, 40 concurrent allocations, same-customer idempotency, exhaustion, immutable ledger, RLS, independent backup restore and next sequence');
   console.log('Test-only database; production untouched. Evidence directory:',root);
+  console.log('PASS document registry: original numbering module, 20 concurrent unique documents, 20 identical requests persist once, immutable issued numbers, B multi-customer FK lookup, AR association, atomic rollback, runtime config and restore');
 } finally {
+  if(http) await new Promise<void>((resolve,reject)=>http!.close(error=>error?reject(error):resolve()));
   await pool.end(); await restored.end(); if(started) await pg.stop();
 }

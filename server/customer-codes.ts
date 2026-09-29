@@ -1,5 +1,6 @@
 /** Pure formatting only. Allocation must occur in a database transaction, never from a list index. */
-export const PARTNER_BATCHES = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+import { BATCHES, makePartnerCode, makeEntityCode, makeCustomerCode } from './coding-contract.ts';
+export const PARTNER_BATCHES = BATCHES;
 
 function serial(value: number, maximum: number, label: string) {
   if (!Number.isInteger(value) || value < 1 || value > maximum)
@@ -11,11 +12,11 @@ export function partnerCode(joinYear: number, assignedSequence: number) {
   const offset = joinYear - 2026;
   if (!Number.isInteger(offset) || offset < 0 || offset >= PARTNER_BATCHES.length)
     throw new Error('入职年份不在当前批次编码范围内，请核对；不会自动循环使用批次');
-  return PARTNER_BATCHES[offset] + String(serial(assignedSequence, 999, '合伙人序号')).padStart(3, '0');
+  return makePartnerCode(PARTNER_BATCHES[offset], serial(assignedSequence, 999, '合伙人序号'));
 }
 
 export function employeeCode(assignedSequence: number) {
-  return 'EMP' + String(serial(assignedSequence, 9999, '员工序号')).padStart(4, '0');
+  return makeEntityCode('EMP', serial(assignedSequence, 9999, '员工序号'));
 }
 
 export function customerCode(partner: string, firstContactDate: string, assignedSequence: number) {
@@ -28,6 +29,5 @@ export function customerCode(partner: string, firstContactDate: string, assigned
   const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   if (year < 1000 || month < 1 || month > 12 || day < 1 || day > days[month - 1])
     throw new Error('首次接触日期不是有效日历日期，请核对原记录');
-  return partner + firstContactDate.slice(2).replaceAll('-', '') +
-    String(serial(assignedSequence, 999, '当日新客户序号')).padStart(3, '0');
+  return makeCustomerCode(partner, firstContactDate, serial(assignedSequence, 999, '当日新客户序号'));
 }

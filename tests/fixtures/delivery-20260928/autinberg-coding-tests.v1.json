@@ -1,0 +1,2035 @@
+{
+  "$schema": "autinberg-coding-tests/v1",
+  "specVersion": "1.1",
+  "frozenAt": "2026-09-22",
+  "howToUse": [
+    "实现方（CRM）写完编号函数后，**必须让本文件的全部用例通过**才算验收合格。",
+    "`valid`     = 给定输入必须得到给定输出（**逐字符相等**，注意补零）",
+    "`invalid`   = 生成函数遇非法输入必须**抛出领域错误**；静默兜底 / 返回空值 / 返回 None 均视为失败",
+    "`checks`    = 校验函数（is_customer_code / is_document_code）对给定字符串应判 True 还是 False",
+    "`sequences` = 多步推进，验证序号分组逻辑（单值用例覆盖不到 —— 比如「老客户跟进不占号」「不同客户各自从 001 起」）",
+    "期望值由 `codespec_ref.py` 真算得出，不是手写 —— 它就是本文件的真值来源。",
+    "运行方式：`python 校验并跑测试.py`（见交付包内该文件）。"
+  ],
+  "counts": {
+    "valid": 32,
+    "invalid": 44,
+    "checks": 65,
+    "sequences": 14,
+    "sequenceSteps": 45
+  },
+  "errorSemantics": {
+    "requirement": "非法输入必须**显式失败**（抛异常 / 返回错误对象）。",
+    "forbidden": [
+      "自动补零",
+      "自动截断",
+      "自动替换非法字符",
+      "返回空字符串",
+      "返回 None"
+    ],
+    "why": "静默兜底会让错误数据悄悄落库，事后无法追溯哪一条是错的。宁可让写入失败、让人看见，也不要让脏数据进库。"
+  },
+  "valid": [
+    {
+      "id": "partner_A_1",
+      "op": "make_partner_code",
+      "args": [
+        "A",
+        1
+      ],
+      "expect": "A001",
+      "why": "定稿示例：A 批次第 1 位"
+    },
+    {
+      "id": "partner_B_999",
+      "op": "make_partner_code",
+      "args": [
+        "B",
+        999
+      ],
+      "expect": "B999",
+      "why": "批次 B + 序号上限"
+    },
+    {
+      "id": "partner_Z_24",
+      "op": "make_partner_code",
+      "args": [
+        "Z",
+        24
+      ],
+      "expect": "Z024",
+      "why": "末位批次字母 + 序号补零到 3 位"
+    },
+    {
+      "id": "partner_J_100",
+      "op": "make_partner_code",
+      "args": [
+        "J",
+        100
+      ],
+      "expect": "J100",
+      "why": "★ J 合法 —— 跳过的只有 I 和 O，不是整段字母"
+    },
+    {
+      "id": "partner_a_1",
+      "op": "make_partner_code",
+      "args": [
+        "a",
+        1
+      ],
+      "expect": "A001",
+      "why": "小写输入应被归一化为大写（生成函数宽容）"
+    },
+    {
+      "id": "partner_A_1_2",
+      "op": "make_partner_code",
+      "args": [
+        " A ",
+        1
+      ],
+      "expect": "A001",
+      "why": "前后空格应被 trim"
+    },
+    {
+      "id": "customer_A001_2026-09-22_1",
+      "op": "make_customer_code",
+      "args": [
+        "A001",
+        "2026-09-22",
+        1
+      ],
+      "expect": "A001260922001",
+      "why": "定稿示例"
+    },
+    {
+      "id": "customer_A001_2026-9-22_1",
+      "op": "make_customer_code",
+      "args": [
+        "A001",
+        "2026-9-22",
+        1
+      ],
+      "expect": "A001260922001",
+      "why": "★ 生成函数容忍非补零日期（宽容输入），输出仍标准化为 6 位"
+    },
+    {
+      "id": "customer_A001_260922_1",
+      "op": "make_customer_code",
+      "args": [
+        "A001",
+        "260922",
+        1
+      ],
+      "expect": "A001260922001",
+      "why": "接受 YYMMDD 直传"
+    },
+    {
+      "id": "customer_H999_2027-12-31_999",
+      "op": "make_customer_code",
+      "args": [
+        "H999",
+        "2027-12-31",
+        999
+      ],
+      "expect": "H999271231999",
+      "why": "边界：最大批次序号 + 年末 + 序号 999"
+    },
+    {
+      "id": "customer_A002_2026-09-22_7",
+      "op": "make_customer_code",
+      "args": [
+        "A002",
+        "2026-09-22",
+        7
+      ],
+      "expect": "A002260922007",
+      "why": "另一合伙人的第 7 个新客户"
+    },
+    {
+      "id": "customer_A001_2026-01-01_1",
+      "op": "make_customer_code",
+      "args": [
+        "A001",
+        "2026-01-01",
+        1
+      ],
+      "expect": "A001260101001",
+      "why": "年初边界（1 月 1 日，补零）"
+    },
+    {
+      "id": "doc_QT_s1",
+      "op": "make_document_code",
+      "args": [
+        "QT"
+      ],
+      "expect": "A001260922001-QT001",
+      "why": "A 类定稿示例（报价单）",
+      "kwargs": {
+        "customer_code": "A001260922001",
+        "seq": 1
+      }
+    },
+    {
+      "id": "doc_SC_s12",
+      "op": "make_document_code",
+      "args": [
+        "SC"
+      ],
+      "expect": "A001260922001-SC012",
+      "why": "A 类序号补零到 3 位",
+      "kwargs": {
+        "customer_code": "A001260922001",
+        "seq": 12
+      }
+    },
+    {
+      "id": "doc_BP_s999",
+      "op": "make_document_code",
+      "args": [
+        "BP"
+      ],
+      "expect": "H999271231999-BP999",
+      "why": "A 类序号上限",
+      "kwargs": {
+        "customer_code": "H999271231999",
+        "seq": 999
+      }
+    },
+    {
+      "id": "doc_PI_s1",
+      "op": "make_document_code",
+      "args": [
+        "PI"
+      ],
+      "expect": "A001260922001-PI001",
+      "why": "★ 类码 PI 含字母 I —— 类码不受 I/O 禁用限制",
+      "kwargs": {
+        "customer_code": "A001260922001",
+        "seq": 1
+      }
+    },
+    {
+      "id": "doc_SO_s2",
+      "op": "make_document_code",
+      "args": [
+        "SO"
+      ],
+      "expect": "A001260922001-SO002",
+      "why": "★ 类码 SO 含字母 O —— 同上",
+      "kwargs": {
+        "customer_code": "A001260922001",
+        "seq": 2
+      }
+    },
+    {
+      "id": "doc_CI_s3",
+      "op": "make_document_code",
+      "args": [
+        "CI"
+      ],
+      "expect": "A001260922001-CI003",
+      "why": "★ 类码 CI 含字母 I —— 同上",
+      "kwargs": {
+        "customer_code": "A001260922001",
+        "seq": 3
+      }
+    },
+    {
+      "id": "doc_PO_s12",
+      "op": "make_document_code",
+      "args": [
+        "PO"
+      ],
+      "expect": "PO2610010012",
+      "why": "B 类定稿示例（采购订单）",
+      "kwargs": {
+        "issue_date": "2026-10-01",
+        "seq": 12
+      }
+    },
+    {
+      "id": "doc_WO_s1",
+      "op": "make_document_code",
+      "args": [
+        "WO"
+      ],
+      "expect": "WO2610010001",
+      "why": "★ 类码 WO 含字母 O",
+      "kwargs": {
+        "issue_date": "2026-10-01",
+        "seq": 1
+      }
+    },
+    {
+      "id": "doc_MO_s1",
+      "op": "make_document_code",
+      "args": [
+        "MO"
+      ],
+      "expect": "MO2610010001",
+      "why": "★ 类码 MO 含字母 O",
+      "kwargs": {
+        "issue_date": "2026-10-01",
+        "seq": 1
+      }
+    },
+    {
+      "id": "doc_QC_s2",
+      "op": "make_document_code",
+      "args": [
+        "QC"
+      ],
+      "expect": "QC2611180002",
+      "why": "B 类流水补零到 4 位",
+      "kwargs": {
+        "issue_date": "2026-11-18",
+        "seq": 2
+      }
+    },
+    {
+      "id": "doc_CK_s9999",
+      "op": "make_document_code",
+      "args": [
+        "CK"
+      ],
+      "expect": "CK2611189999",
+      "why": "B 类流水上限",
+      "kwargs": {
+        "issue_date": "2026-11-18",
+        "seq": 9999
+      }
+    },
+    {
+      "id": "doc_type_lowercase_normalized",
+      "op": "make_document_code",
+      "args": [
+        "qt"
+      ],
+      "expect": "A001260922001-QT001",
+      "why": "小写类码应被归一化为大写（生成函数宽容）",
+      "kwargs": {
+        "customer_code": "A001260922001",
+        "seq": 1
+      }
+    },
+    {
+      "id": "EMP-basic",
+      "op": "make_entity_code",
+      "args": [
+        "EMP",
+        1
+      ],
+      "expect": "EMP0001",
+      "why": "员工码：3 位前缀 + 4 位流水"
+    },
+    {
+      "id": "EMP-max",
+      "op": "make_entity_code",
+      "args": [
+        "EMP",
+        9999
+      ],
+      "expect": "EMP9999",
+      "why": "员工码容量上界 9,999"
+    },
+    {
+      "id": "SUP-basic",
+      "op": "make_entity_code",
+      "args": [
+        "SUP",
+        1
+      ],
+      "expect": "SUP0001",
+      "why": "供应商码（取代旧规则 SUP-26-001）"
+    },
+    {
+      "id": "SUP-26",
+      "op": "make_entity_code",
+      "args": [
+        "SUP",
+        26
+      ],
+      "expect": "SUP0026",
+      "why": "★ 供应商码不再含年份段 —— 26 只是第 26 家，不是 2026 年"
+    },
+    {
+      "id": "AST-basic",
+      "op": "make_entity_code",
+      "args": [
+        "AST",
+        7
+      ],
+      "expect": "AST0007",
+      "why": "资产码（取代旧规则 AUT-ADM-MP-001）"
+    },
+    {
+      "id": "ENT-lower-type",
+      "op": "make_entity_code",
+      "args": [
+        "emp",
+        1
+      ],
+      "expect": "EMP0001",
+      "why": "类型码大小写归一"
+    },
+    {
+      "id": "ENT-space-type",
+      "op": "make_entity_code",
+      "args": [
+        "  SUP  ",
+        3
+      ],
+      "expect": "SUP0003",
+      "why": "类型码两端空白可容忍"
+    },
+    {
+      "id": "ENT-str-serial",
+      "op": "make_entity_code",
+      "args": [
+        "AST",
+        "12"
+      ],
+      "expect": "AST0012",
+      "why": "流水接受数字字符串，补零到定宽"
+    }
+  ],
+  "invalid": [
+    {
+      "id": "partner_bad_I_1",
+      "op": "make_partner_code",
+      "args": [
+        "I",
+        1
+      ],
+      "expectError": true,
+      "why": "★ 批次字母不得用 I（与数字 1 混淆）"
+    },
+    {
+      "id": "partner_bad_O_1",
+      "op": "make_partner_code",
+      "args": [
+        "O",
+        1
+      ],
+      "expectError": true,
+      "why": "★ 批次字母不得用 O（与数字 0 混淆）"
+    },
+    {
+      "id": "partner_bad_A_0",
+      "op": "make_partner_code",
+      "args": [
+        "A",
+        0
+      ],
+      "expectError": true,
+      "why": "序号从 001 起，0 非法"
+    },
+    {
+      "id": "partner_bad_A_1000",
+      "op": "make_partner_code",
+      "args": [
+        "A",
+        1000
+      ],
+      "expectError": true,
+      "why": "★ 序号上限 999 —— 第 1000 人须启用下一批次"
+    },
+    {
+      "id": "partner_bad_AA_1",
+      "op": "make_partner_code",
+      "args": [
+        "AA",
+        1
+      ],
+      "expectError": true,
+      "why": "批次字母只能 1 位"
+    },
+    {
+      "id": "partner_bad_EMPTY_1",
+      "op": "make_partner_code",
+      "args": [
+        "",
+        1
+      ],
+      "expectError": true,
+      "why": "批次字母必填"
+    },
+    {
+      "id": "partner_bad_A_abc",
+      "op": "make_partner_code",
+      "args": [
+        "A",
+        "abc"
+      ],
+      "expectError": true,
+      "why": "序号必须是整数，不得静默当 0"
+    },
+    {
+      "id": "partner_bad_1_1",
+      "op": "make_partner_code",
+      "args": [
+        "1",
+        1
+      ],
+      "expectError": true,
+      "why": "批次字母不得是数字"
+    },
+    {
+      "id": "customer_bad_A001_2026-09-_0",
+      "op": "make_customer_code",
+      "args": [
+        "A001",
+        "2026-09-22",
+        0
+      ],
+      "expectError": true,
+      "why": "当日序号从 001 起，0 非法"
+    },
+    {
+      "id": "customer_bad_A001_2026-09-_1000",
+      "op": "make_customer_code",
+      "args": [
+        "A001",
+        "2026-09-22",
+        1000
+      ],
+      "expectError": true,
+      "why": "当日序号上限 999"
+    },
+    {
+      "id": "customer_bad_A01_2026-09-_1",
+      "op": "make_customer_code",
+      "args": [
+        "A01",
+        "2026-09-22",
+        1
+      ],
+      "expectError": true,
+      "why": "★ 旧版 2 位序号 `A01` 已作废，必须报错（防旧代码混入）"
+    },
+    {
+      "id": "customer_bad_I001_2026-09-_1",
+      "op": "make_customer_code",
+      "args": [
+        "I001",
+        "2026-09-22",
+        1
+      ],
+      "expectError": true,
+      "why": "合伙人编码含禁用字母 I"
+    },
+    {
+      "id": "customer_bad_O001_2026-09-_1",
+      "op": "make_customer_code",
+      "args": [
+        "O001",
+        "2026-09-22",
+        1
+      ],
+      "expectError": true,
+      "why": "合伙人编码含禁用字母 O"
+    },
+    {
+      "id": "customer_bad_A001_2026-13-_1",
+      "op": "make_customer_code",
+      "args": [
+        "A001",
+        "2026-13-01",
+        1
+      ],
+      "expectError": true,
+      "why": "★ 13 月非法 —— 必须做日期合法性校验，不能只匹配数字格式"
+    },
+    {
+      "id": "customer_bad_A001_2026-02-_1",
+      "op": "make_customer_code",
+      "args": [
+        "A001",
+        "2026-02-30",
+        1
+      ],
+      "expectError": true,
+      "why": "★ 2 月 30 日不存在 —— 同上"
+    },
+    {
+      "id": "customer_bad_A001_2026/09/_1",
+      "op": "make_customer_code",
+      "args": [
+        "A001",
+        "2026/09/22",
+        1
+      ],
+      "expectError": true,
+      "why": "日期分隔符必须是连字符"
+    },
+    {
+      "id": "customer_bad_A001_2026-09-_abc",
+      "op": "make_customer_code",
+      "args": [
+        "A001",
+        "2026-09-22",
+        "abc"
+      ],
+      "expectError": true,
+      "why": "序号必须是整数"
+    },
+    {
+      "id": "customer_bad_A001_2026-09-_None",
+      "op": "make_customer_code",
+      "args": [
+        "A001",
+        "2026-09-22",
+        null
+      ],
+      "expectError": true,
+      "why": "序号不得为空"
+    },
+    {
+      "id": "customer_bad_A001_EMPTY_1",
+      "op": "make_customer_code",
+      "args": [
+        "A001",
+        "",
+        1
+      ],
+      "expectError": true,
+      "why": "日期必填"
+    },
+    {
+      "id": "customer_bad_A001_2026-09-_1.5",
+      "op": "make_customer_code",
+      "args": [
+        "A001",
+        "2026-09-22",
+        1.5
+      ],
+      "expectError": true,
+      "why": "序号必须是整数，不接受小数"
+    },
+    {
+      "id": "doc_bad_QT_1000",
+      "op": "make_document_code",
+      "args": [
+        "QT"
+      ],
+      "expectError": true,
+      "why": "A 类序号上限 999（该客户该类型第 1000 份须另立规则）",
+      "kwargs": {
+        "customer_code": "A001260922001",
+        "seq": 1000
+      }
+    },
+    {
+      "id": "doc_bad_QT_1",
+      "op": "make_document_code",
+      "args": [
+        "QT"
+      ],
+      "expectError": true,
+      "why": "★ A 类单据必须提供客户编号",
+      "kwargs": {
+        "seq": 1
+      }
+    },
+    {
+      "id": "doc_bad_QT_1_2",
+      "op": "make_document_code",
+      "args": [
+        "QT"
+      ],
+      "expectError": true,
+      "why": "客户编号不合规应报错",
+      "kwargs": {
+        "customer_code": "BAD",
+        "seq": 1
+      }
+    },
+    {
+      "id": "doc_bad_QT_1_3",
+      "op": "make_document_code",
+      "args": [
+        "QT"
+      ],
+      "expectError": true,
+      "why": "★ 旧版 2 位客户编号应报错",
+      "kwargs": {
+        "customer_code": "A01",
+        "seq": 1
+      }
+    },
+    {
+      "id": "doc_bad_QT_0",
+      "op": "make_document_code",
+      "args": [
+        "QT"
+      ],
+      "expectError": true,
+      "why": "A 类序号从 001 起",
+      "kwargs": {
+        "customer_code": "A001260922001",
+        "seq": 0
+      }
+    },
+    {
+      "id": "doc_bad_PO_1",
+      "op": "make_document_code",
+      "args": [
+        "PO"
+      ],
+      "expectError": true,
+      "why": "★ B 类单据不得拼客户编号 —— 应走 issue_date + seq 路径（antiPatterns AP-05）",
+      "kwargs": {
+        "customer_code": "A001260922001",
+        "seq": 1
+      }
+    },
+    {
+      "id": "doc_bad_PO_1_2",
+      "op": "make_document_code",
+      "args": [
+        "PO"
+      ],
+      "expectError": true,
+      "why": "B 类单据必须提供开单日",
+      "kwargs": {
+        "seq": 1
+      }
+    },
+    {
+      "id": "doc_bad_PO_10000",
+      "op": "make_document_code",
+      "args": [
+        "PO"
+      ],
+      "expectError": true,
+      "why": "B 类流水上限 9999",
+      "kwargs": {
+        "issue_date": "2026-10-01",
+        "seq": 10000
+      }
+    },
+    {
+      "id": "doc_bad_PO_1_3",
+      "op": "make_document_code",
+      "args": [
+        "PO"
+      ],
+      "expectError": true,
+      "why": "B 类开单日须合法",
+      "kwargs": {
+        "issue_date": "2026-13-01",
+        "seq": 1
+      }
+    },
+    {
+      "id": "doc_bad_XX_1",
+      "op": "make_document_code",
+      "args": [
+        "XX"
+      ],
+      "expectError": true,
+      "why": "未登记的类码应报错",
+      "kwargs": {
+        "issue_date": "2026-10-01",
+        "seq": 1
+      }
+    },
+    {
+      "id": "doc_bad_II_1",
+      "op": "make_document_code",
+      "args": [
+        "II"
+      ],
+      "expectError": true,
+      "why": "未登记的类码应报错（含禁用字母）",
+      "kwargs": {
+        "issue_date": "2026-10-01",
+        "seq": 1
+      }
+    },
+    {
+      "id": "ENT-reserved-LSP",
+      "op": "make_entity_code",
+      "args": [
+        "LSP",
+        1
+      ],
+      "expectError": true,
+      "why": "★ 码段 LSP（物流/货代）状态为 RESERVED，只登记格式、未启用发号 —— 实现方不得自行启用"
+    },
+    {
+      "id": "ENT-reserved-SVC",
+      "op": "make_entity_code",
+      "args": [
+        "SVC",
+        1
+      ],
+      "expectError": true,
+      "why": "★ 码段 SVC（服务商）状态为 RESERVED，只登记格式、未启用发号 —— 实现方不得自行启用"
+    },
+    {
+      "id": "ENT-reserved-SKU",
+      "op": "make_entity_code",
+      "args": [
+        "SKU",
+        1
+      ],
+      "expectError": true,
+      "why": "★ 码段 SKU（产品/SKU）状态为 RESERVED，只登记格式、未启用发号 —— 实现方不得自行启用"
+    },
+    {
+      "id": "ENT-reserved-MAT",
+      "op": "make_entity_code",
+      "args": [
+        "MAT",
+        1
+      ],
+      "expectError": true,
+      "why": "★ 码段 MAT（物料）状态为 RESERVED，只登记格式、未启用发号 —— 实现方不得自行启用"
+    },
+    {
+      "id": "ENT-reserved-SMP",
+      "op": "make_entity_code",
+      "args": [
+        "SMP",
+        1
+      ],
+      "expectError": true,
+      "why": "★ 码段 SMP（样品）状态为 RESERVED，只登记格式、未启用发号 —— 实现方不得自行启用"
+    },
+    {
+      "id": "ENT-reserved-BNK",
+      "op": "make_entity_code",
+      "args": [
+        "BNK",
+        1
+      ],
+      "expectError": true,
+      "why": "★ 码段 BNK（银行账户）状态为 RESERVED，只登记格式、未启用发号 —— 实现方不得自行启用"
+    },
+    {
+      "id": "ENT-reserved-POS",
+      "op": "make_entity_code",
+      "args": [
+        "POS",
+        1
+      ],
+      "expectError": true,
+      "why": "★ 码段 POS（岗位）状态为 RESERVED，只登记格式、未启用发号 —— 实现方不得自行启用"
+    },
+    {
+      "id": "ENT-unknown",
+      "op": "make_entity_code",
+      "args": [
+        "XYZ",
+        1
+      ],
+      "expectError": true,
+      "why": "未登记的三字母前缀不得发号"
+    },
+    {
+      "id": "ENT-unknown2",
+      "op": "make_entity_code",
+      "args": [
+        "PARTNER",
+        1
+      ],
+      "expectError": true,
+      "why": "合伙人编码不走实体码函数"
+    },
+    {
+      "id": "ENT-zero",
+      "op": "make_entity_code",
+      "args": [
+        "EMP",
+        0
+      ],
+      "expectError": true,
+      "why": "分配制从 1 开始，不存在 0 号"
+    },
+    {
+      "id": "ENT-overflow",
+      "op": "make_entity_code",
+      "args": [
+        "EMP",
+        10000
+      ],
+      "expectError": true,
+      "why": "员工码 4 位容量上界 9,999"
+    },
+    {
+      "id": "ENT-negative",
+      "op": "make_entity_code",
+      "args": [
+        "SUP",
+        -1
+      ],
+      "expectError": true,
+      "why": "负数流水非法"
+    },
+    {
+      "id": "ENT-none-serial",
+      "op": "make_entity_code",
+      "args": [
+        "AST",
+        null
+      ],
+      "expectError": true,
+      "why": "流水缺失不得静默补 0"
+    }
+  ],
+  "checks": [
+    {
+      "id": "cust_ok_A001260922001",
+      "op": "is_customer_code",
+      "args": [
+        "A001260922001"
+      ],
+      "expect": true,
+      "why": "合法客户编号"
+    },
+    {
+      "id": "cust_ok_H999271231999",
+      "op": "is_customer_code",
+      "args": [
+        "H999271231999"
+      ],
+      "expect": true,
+      "why": "合法客户编号"
+    },
+    {
+      "id": "cust_ok_A002260922007",
+      "op": "is_customer_code",
+      "args": [
+        "A002260922007"
+      ],
+      "expect": true,
+      "why": "合法客户编号"
+    },
+    {
+      "id": "cust_ok_B001270101001",
+      "op": "is_customer_code",
+      "args": [
+        "B001270101001"
+      ],
+      "expect": true,
+      "why": "合法客户编号"
+    },
+    {
+      "id": "cust_reject_A00126092201",
+      "op": "is_customer_code",
+      "args": [
+        "A00126092201"
+      ],
+      "expect": false,
+      "why": "12 位，少一位"
+    },
+    {
+      "id": "cust_reject_A0012609220011",
+      "op": "is_customer_code",
+      "args": [
+        "A0012609220011"
+      ],
+      "expect": false,
+      "why": "14 位，多一位"
+    },
+    {
+      "id": "cust_reject_A00126092200",
+      "op": "is_customer_code",
+      "args": [
+        "A00126092200"
+      ],
+      "expect": false,
+      "why": "序号 2 位"
+    },
+    {
+      "id": "cust_reject_I001260922001",
+      "op": "is_customer_code",
+      "args": [
+        "I001260922001"
+      ],
+      "expect": false,
+      "why": "含禁用字母 I"
+    },
+    {
+      "id": "cust_reject_O001260922001",
+      "op": "is_customer_code",
+      "args": [
+        "O001260922001"
+      ],
+      "expect": false,
+      "why": "含禁用字母 O"
+    },
+    {
+      "id": "cust_reject_a001260922001",
+      "op": "is_customer_code",
+      "args": [
+        "a001260922001"
+      ],
+      "expect": false,
+      "why": "★ 小写 —— 校验函数是**严格**的，不做归一化，应判 False"
+    },
+    {
+      "id": "cust_reject_A001-260922-001",
+      "op": "is_customer_code",
+      "args": [
+        "A001-260922-001"
+      ],
+      "expect": false,
+      "why": "编号内不得有连字符"
+    },
+    {
+      "id": "cust_reject_A001260922001-QT001",
+      "op": "is_customer_code",
+      "args": [
+        "A001260922001-QT001"
+      ],
+      "expect": false,
+      "why": "这是单据号，不是客户编号"
+    },
+    {
+      "id": "cust_reject_LL20260903001",
+      "op": "is_customer_code",
+      "args": [
+        "LL20260903001"
+      ],
+      "expect": false,
+      "why": "存量旧编号，不属于新体系"
+    },
+    {
+      "id": "cust_reject_GPP",
+      "op": "is_customer_code",
+      "args": [
+        "GPP"
+      ],
+      "expect": false,
+      "why": "存量旧编号"
+    },
+    {
+      "id": "cust_reject_EMPTY",
+      "op": "is_customer_code",
+      "args": [
+        ""
+      ],
+      "expect": false,
+      "why": "空值"
+    },
+    {
+      "id": "cust_ok_trimmed_space",
+      "op": "is_customer_code",
+      "args": [
+        "  A001260922001  "
+      ],
+      "expect": true,
+      "why": "校验前统一 trim（入库前的归一化由写入口负责；校验器对空白宽容，对大小写严格）"
+    },
+    {
+      "id": "doc_ok_A001260922001-QT001",
+      "op": "is_document_code",
+      "args": [
+        "A001260922001-QT001"
+      ],
+      "expect": true,
+      "why": "合法单据编号（A 类）"
+    },
+    {
+      "id": "doc_ok_PO2610010012",
+      "op": "is_document_code",
+      "args": [
+        "PO2610010012"
+      ],
+      "expect": true,
+      "why": "合法单据编号（B 类）"
+    },
+    {
+      "id": "doc_ok_A001260922001-PI001",
+      "op": "is_document_code",
+      "args": [
+        "A001260922001-PI001"
+      ],
+      "expect": true,
+      "why": "合法单据编号（A 类）"
+    },
+    {
+      "id": "doc_ok_WO2610010001",
+      "op": "is_document_code",
+      "args": [
+        "WO2610010001"
+      ],
+      "expect": true,
+      "why": "合法单据编号（B 类）"
+    },
+    {
+      "id": "doc_reject_QT2610010001",
+      "op": "is_document_code",
+      "args": [
+        "QT2610010001"
+      ],
+      "expect": false,
+      "why": "★ A 类类码写成 B 类格式 —— 必须报错"
+    },
+    {
+      "id": "doc_reject_A001260922001-PO001",
+      "op": "is_document_code",
+      "args": [
+        "A001260922001-PO001"
+      ],
+      "expect": false,
+      "why": "★ B 类类码写成 A 类格式 —— 必须报错"
+    },
+    {
+      "id": "doc_reject_a001260922001-qt001",
+      "op": "is_document_code",
+      "args": [
+        "a001260922001-qt001"
+      ],
+      "expect": false,
+      "why": "小写（校验严格，不归一化）"
+    },
+    {
+      "id": "doc_reject_A001260922001_QT001",
+      "op": "is_document_code",
+      "args": [
+        "A001260922001_QT001"
+      ],
+      "expect": false,
+      "why": "下划线分隔符非法"
+    },
+    {
+      "id": "doc_reject_A001260922001ENDASHQT001",
+      "op": "is_document_code",
+      "args": [
+        "A001260922001–QT001"
+      ],
+      "expect": false,
+      "why": "★ 中文破折号非法（视觉上像连字符，必须拦截）"
+    },
+    {
+      "id": "doc_reject_A001260922001-QT01",
+      "op": "is_document_code",
+      "args": [
+        "A001260922001-QT01"
+      ],
+      "expect": false,
+      "why": "A 类序号须 3 位"
+    },
+    {
+      "id": "doc_reject_A001260922001-QT0001",
+      "op": "is_document_code",
+      "args": [
+        "A001260922001-QT0001"
+      ],
+      "expect": false,
+      "why": "A 类序号须 3 位（4 位非法）"
+    },
+    {
+      "id": "doc_reject_A001260922001-XX001",
+      "op": "is_document_code",
+      "args": [
+        "A001260922001-XX001"
+      ],
+      "expect": false,
+      "why": "未登记类码"
+    },
+    {
+      "id": "doc_reject_A01-QT001",
+      "op": "is_document_code",
+      "args": [
+        "A01-QT001"
+      ],
+      "expect": false,
+      "why": "客户编号位数不足"
+    },
+    {
+      "id": "doc_reject_A001260922001Q_T001",
+      "op": "is_document_code",
+      "args": [
+        "A001260922001Q T001"
+      ],
+      "expect": false,
+      "why": "含空格"
+    },
+    {
+      "id": "doc_reject_",
+      "op": "is_document_code",
+      "args": [
+        ""
+      ],
+      "expect": false,
+      "why": "空值"
+    },
+    {
+      "id": "ENT-is-EMP0001",
+      "op": "is_entity_code",
+      "args": [
+        "EMP0001"
+      ],
+      "expect": true,
+      "why": "格式合法的实体码：EMP0001"
+    },
+    {
+      "id": "ENT-is-EMP9999",
+      "op": "is_entity_code",
+      "args": [
+        "EMP9999"
+      ],
+      "expect": true,
+      "why": "格式合法的实体码：EMP9999"
+    },
+    {
+      "id": "ENT-is-SUP0001",
+      "op": "is_entity_code",
+      "args": [
+        "SUP0001"
+      ],
+      "expect": true,
+      "why": "格式合法的实体码：SUP0001"
+    },
+    {
+      "id": "ENT-is-SUP0026",
+      "op": "is_entity_code",
+      "args": [
+        "SUP0026"
+      ],
+      "expect": true,
+      "why": "格式合法的实体码：SUP0026"
+    },
+    {
+      "id": "ENT-is-AST0007",
+      "op": "is_entity_code",
+      "args": [
+        "AST0007"
+      ],
+      "expect": true,
+      "why": "格式合法的实体码：AST0007"
+    },
+    {
+      "id": "ENT-is-AST0001",
+      "op": "is_entity_code",
+      "args": [
+        "AST0001"
+      ],
+      "expect": true,
+      "why": "格式合法的实体码：AST0001"
+    },
+    {
+      "id": "ENT-is-LSP001",
+      "op": "is_entity_code",
+      "args": [
+        "LSP001"
+      ],
+      "expect": true,
+      "why": "格式合法的实体码：LSP001"
+    },
+    {
+      "id": "ENT-is-SVC001",
+      "op": "is_entity_code",
+      "args": [
+        "SVC001"
+      ],
+      "expect": true,
+      "why": "格式合法的实体码：SVC001"
+    },
+    {
+      "id": "ENT-is-SKU00001",
+      "op": "is_entity_code",
+      "args": [
+        "SKU00001"
+      ],
+      "expect": true,
+      "why": "格式合法的实体码：SKU00001"
+    },
+    {
+      "id": "ENT-is-MAT0001",
+      "op": "is_entity_code",
+      "args": [
+        "MAT0001"
+      ],
+      "expect": true,
+      "why": "格式合法的实体码：MAT0001"
+    },
+    {
+      "id": "ENT-is-SMP0001",
+      "op": "is_entity_code",
+      "args": [
+        "SMP0001"
+      ],
+      "expect": true,
+      "why": "格式合法的实体码：SMP0001"
+    },
+    {
+      "id": "ENT-is-BNK01",
+      "op": "is_entity_code",
+      "args": [
+        "BNK01"
+      ],
+      "expect": true,
+      "why": "格式合法的实体码：BNK01"
+    },
+    {
+      "id": "ENT-is-POS001",
+      "op": "is_entity_code",
+      "args": [
+        "POS001"
+      ],
+      "expect": true,
+      "why": "格式合法的实体码：POS001"
+    },
+    {
+      "id": "XU-docPO-as-entity",
+      "op": "is_entity_code",
+      "args": [
+        "PO2610010012"
+      ],
+      "expect": false,
+      "why": "★ 采购订单是单据码（2 位类码），不是实体码"
+    },
+    {
+      "id": "XU-docAS-as-entity",
+      "op": "is_entity_code",
+      "args": [
+        "AS2610010007"
+      ],
+      "expect": false,
+      "why": "★ 资产单（单据）与资产（实体）前缀长度不同 —— AS 是最易混的一对"
+    },
+    {
+      "id": "XU-docA-as-entity",
+      "op": "is_entity_code",
+      "args": [
+        "A001260922001-QT001"
+      ],
+      "expect": false,
+      "why": "★ A 类单据号不是实体码"
+    },
+    {
+      "id": "XU-cust-as-entity",
+      "op": "is_entity_code",
+      "args": [
+        "A001260922001"
+      ],
+      "expect": false,
+      "why": "★ 客户编号是实体码，但**不走**实体码函数（它有独立的分段规则）"
+    },
+    {
+      "id": "XU-partner-as-entity",
+      "op": "is_entity_code",
+      "args": [
+        "A001"
+      ],
+      "expect": false,
+      "why": "★ 合伙人编码 4 位，不是 3 位前缀的实体码"
+    },
+    {
+      "id": "XU-file-as-entity",
+      "op": "is_entity_code",
+      "args": [
+        "AUT-SAL-004"
+      ],
+      "expect": false,
+      "why": "★ 文件码用 AUT- 前缀，不是实体码"
+    },
+    {
+      "id": "XU-entity-as-doc",
+      "op": "is_document_code",
+      "args": [
+        "SUP0007"
+      ],
+      "expect": false,
+      "why": "★ 反向：供应商码不是单据码"
+    },
+    {
+      "id": "XU-entity-as-doc2",
+      "op": "is_document_code",
+      "args": [
+        "EMP0001"
+      ],
+      "expect": false,
+      "why": "★ 反向：员工码不是单据码"
+    },
+    {
+      "id": "XU-entity-as-cust",
+      "op": "is_customer_code",
+      "args": [
+        "SUP0007"
+      ],
+      "expect": false,
+      "why": "★ 供应商码不是客户编号"
+    },
+    {
+      "id": "ENT-bad-EMP001",
+      "op": "is_entity_code",
+      "args": [
+        "EMP001"
+      ],
+      "expect": false,
+      "why": "流水应为 4 位，实得 3 位"
+    },
+    {
+      "id": "ENT-bad-EMP0000",
+      "op": "is_entity_code",
+      "args": [
+        "EMP0000"
+      ],
+      "expect": false,
+      "why": "全零流水非法（从 1 起）"
+    },
+    {
+      "id": "ENT-bad-emp0001",
+      "op": "is_entity_code",
+      "args": [
+        "emp0001"
+      ],
+      "expect": false,
+      "why": "小写不合法 —— 校验必须严格，不做大小写归一"
+    },
+    {
+      "id": "ENT-bad-EMP_0001",
+      "op": "is_entity_code",
+      "args": [
+        "EMP 0001"
+      ],
+      "expect": false,
+      "why": "内部含空格"
+    },
+    {
+      "id": "ENT-bad-EMP0001_",
+      "op": "is_entity_code",
+      "args": [
+        "EMP0001 "
+      ],
+      "expect": false,
+      "why": "尾部含空格"
+    },
+    {
+      "id": "ENT-bad-SUP0001_",
+      "op": "is_entity_code",
+      "args": [
+        "SUP0001-"
+      ],
+      "expect": false,
+      "why": "尾部含连字符（旧规则残余）"
+    },
+    {
+      "id": "ENT-bad-SUP_26_001",
+      "op": "is_entity_code",
+      "args": [
+        "SUP-26-001"
+      ],
+      "expect": false,
+      "why": "★ 旧供应商码格式，已废止，不得再判为合法"
+    },
+    {
+      "id": "ENT-bad-AUT_ADM_MP_001",
+      "op": "is_entity_code",
+      "args": [
+        "AUT-ADM-MP-001"
+      ],
+      "expect": false,
+      "why": "★ 旧资产码格式（串了文件码前缀），已废止"
+    },
+    {
+      "id": "ENT-bad-EMP",
+      "op": "is_entity_code",
+      "args": [
+        "EMP"
+      ],
+      "expect": false,
+      "why": "缺流水"
+    },
+    {
+      "id": "ENT-bad-0001",
+      "op": "is_entity_code",
+      "args": [
+        "0001"
+      ],
+      "expect": false,
+      "why": "缺前缀"
+    },
+    {
+      "id": "ENT-bad-EMPA001",
+      "op": "is_entity_code",
+      "args": [
+        "EMPA001"
+      ],
+      "expect": false,
+      "why": "流水含字母"
+    },
+    {
+      "id": "ENT-bad-employee1",
+      "op": "is_entity_code",
+      "args": [
+        "employee1"
+      ],
+      "expect": false,
+      "why": "非 3 位前缀"
+    }
+  ],
+  "sequences": [
+    {
+      "id": "seq_customer_same_partner_same_day",
+      "kind": "sequence",
+      "description": "同一合伙人同一天开发 3 个新客户 → 001 / 002 / 003",
+      "why": "最基本的序号推进",
+      "steps": [
+        {
+          "op": "make_customer_code",
+          "args": [
+            "A001",
+            "2026-09-22",
+            1
+          ],
+          "expect": "A001260922001"
+        },
+        {
+          "op": "make_customer_code",
+          "args": [
+            "A001",
+            "2026-09-22",
+            2
+          ],
+          "expect": "A001260922002"
+        },
+        {
+          "op": "make_customer_code",
+          "args": [
+            "A001",
+            "2026-09-22",
+            3
+          ],
+          "expect": "A001260922003"
+        }
+      ]
+    },
+    {
+      "id": "seq_customer_different_partner_same_day",
+      "kind": "sequence",
+      "description": "不同合伙人同一天各自从 001 起",
+      "why": "★ 客户序号按「合伙人 × 日」分组，**不是**全公司当日流水",
+      "steps": [
+        {
+          "op": "make_customer_code",
+          "args": [
+            "A001",
+            "2026-09-22",
+            1
+          ],
+          "expect": "A001260922001"
+        },
+        {
+          "op": "make_customer_code",
+          "args": [
+            "A002",
+            "2026-09-22",
+            1
+          ],
+          "expect": "A002260922001"
+        },
+        {
+          "op": "make_customer_code",
+          "args": [
+            "A003",
+            "2026-09-22",
+            1
+          ],
+          "expect": "A003260922001"
+        },
+        {
+          "op": "make_customer_code",
+          "args": [
+            "A001",
+            "2026-09-22",
+            2
+          ],
+          "expect": "A001260922002"
+        }
+      ]
+    },
+    {
+      "id": "seq_customer_next_day_reset",
+      "kind": "sequence",
+      "description": "次日序号重置为 001",
+      "why": "日期段参与编号 ⇒ 跨日自然重置；不需要任何\"每日清零\"的定时任务",
+      "steps": [
+        {
+          "op": "make_customer_code",
+          "args": [
+            "A001",
+            "2026-09-22",
+            5
+          ],
+          "expect": "A001260922005"
+        },
+        {
+          "op": "make_customer_code",
+          "args": [
+            "A001",
+            "2026-09-23",
+            1
+          ],
+          "expect": "A001260923001"
+        },
+        {
+          "op": "make_customer_code",
+          "args": [
+            "A001",
+            "2026-09-23",
+            2
+          ],
+          "expect": "A001260923002"
+        }
+      ]
+    },
+    {
+      "id": "seq_customer_month_boundary",
+      "kind": "sequence",
+      "description": "跨月边界：09-30 → 10-01",
+      "why": "避免实现方用 30 天/31 天的近似算法",
+      "steps": [
+        {
+          "op": "make_customer_code",
+          "args": [
+            "A001",
+            "2026-09-30",
+            9
+          ],
+          "expect": "A001260930009"
+        },
+        {
+          "op": "make_customer_code",
+          "args": [
+            "A001",
+            "2026-10-01",
+            1
+          ],
+          "expect": "A001261001001"
+        }
+      ]
+    },
+    {
+      "id": "seq_customer_year_boundary",
+      "kind": "sequence",
+      "description": "跨年边界：2026-12-31 → 2027-01-01",
+      "why": "★ 序号重置，但**批次字母不变** —— 批次按「入职年份」，不按「业务年份」",
+      "steps": [
+        {
+          "op": "make_customer_code",
+          "args": [
+            "A001",
+            "2026-12-31",
+            9
+          ],
+          "expect": "A001261231009"
+        },
+        {
+          "op": "make_customer_code",
+          "args": [
+            "A001",
+            "2027-01-01",
+            1
+          ],
+          "expect": "A001270101001"
+        }
+      ]
+    },
+    {
+      "id": "seq_customer_old_customer_followup_does_not_consume",
+      "kind": "sequence",
+      "description": "★ 同日先跟进老客户、再开发新客户 —— 新客户仍拿 001",
+      "why": "当日序号**只数新客户**。老客户跟进不占号 —— 由 CRM 层保证：跟进老客户时**沿用原编号、不调用发号函数**。这是最容易实现错的一条。",
+      "steps": [
+        {
+          "op": "make_customer_code",
+          "args": [
+            "A001",
+            "2026-09-23",
+            1
+          ],
+          "expect": "A001260923001",
+          "comment": "当天第 1 个【新】客户"
+        },
+        {
+          "op": "make_customer_code",
+          "args": [
+            "A001",
+            "2026-09-23",
+            2
+          ],
+          "expect": "A001260923002",
+          "comment": "当天第 2 个【新】客户"
+        },
+        {
+          "op": "make_customer_code",
+          "args": [
+            "A001",
+            "2026-09-24",
+            1
+          ],
+          "expect": "A001260924001",
+          "comment": "★ 次日：虽然当天先跟了 5 个老客户，新客户仍从 001 起"
+        }
+      ]
+    },
+    {
+      "id": "seq_doc_a_per_customer_increments",
+      "kind": "sequence",
+      "description": "同一客户连续报 3 次价 → QT001 / QT002 / QT003",
+      "why": "★ A 类序号分组 =（客户编号, 类码），**不是**「当天第几份」",
+      "steps": [
+        {
+          "op": "make_document_code",
+          "args": [
+            "QT"
+          ],
+          "kwargs": {
+            "customer_code": "A001260922001",
+            "seq": 1
+          },
+          "expect": "A001260922001-QT001"
+        },
+        {
+          "op": "make_document_code",
+          "args": [
+            "QT"
+          ],
+          "kwargs": {
+            "customer_code": "A001260922001",
+            "seq": 2
+          },
+          "expect": "A001260922001-QT002"
+        },
+        {
+          "op": "make_document_code",
+          "args": [
+            "QT"
+          ],
+          "kwargs": {
+            "customer_code": "A001260922001",
+            "seq": 3
+          },
+          "expect": "A001260922001-QT003"
+        }
+      ]
+    },
+    {
+      "id": "seq_doc_a_cross_customer_independent",
+      "kind": "sequence",
+      "description": "★ 不同客户同日各自从 001 起 —— 这就是「一天 1000 份也不撞号」的证明",
+      "why": "A 类序号与「当天全公司多少份」无关 ⇒ 容量与公司规模彻底脱钩",
+      "steps": [
+        {
+          "op": "make_document_code",
+          "args": [
+            "QT"
+          ],
+          "kwargs": {
+            "customer_code": "A001260922001",
+            "seq": 1
+          },
+          "expect": "A001260922001-QT001"
+        },
+        {
+          "op": "make_document_code",
+          "args": [
+            "QT"
+          ],
+          "kwargs": {
+            "customer_code": "A002260922001",
+            "seq": 1
+          },
+          "expect": "A002260922001-QT001"
+        },
+        {
+          "op": "make_document_code",
+          "args": [
+            "QT"
+          ],
+          "kwargs": {
+            "customer_code": "A002260922007",
+            "seq": 1
+          },
+          "expect": "A002260922007-QT001"
+        },
+        {
+          "op": "make_document_code",
+          "args": [
+            "QT"
+          ],
+          "kwargs": {
+            "customer_code": "A002260922001",
+            "seq": 2
+          },
+          "expect": "A002260922001-QT002"
+        }
+      ]
+    },
+    {
+      "id": "seq_doc_a_type_independent",
+      "kind": "sequence",
+      "description": "同一客户的不同类型单据各自独立计数",
+      "why": "分组键含类码 ⇒ `QT001` 与 `PI001` 可并存，互不影响",
+      "steps": [
+        {
+          "op": "make_document_code",
+          "args": [
+            "QT"
+          ],
+          "kwargs": {
+            "customer_code": "A001260922001",
+            "seq": 1
+          },
+          "expect": "A001260922001-QT001"
+        },
+        {
+          "op": "make_document_code",
+          "args": [
+            "PI"
+          ],
+          "kwargs": {
+            "customer_code": "A001260922001",
+            "seq": 1
+          },
+          "expect": "A001260922001-PI001"
+        },
+        {
+          "op": "make_document_code",
+          "args": [
+            "SC"
+          ],
+          "kwargs": {
+            "customer_code": "A001260922001",
+            "seq": 1
+          },
+          "expect": "A001260922001-SC001"
+        }
+      ]
+    },
+    {
+      "id": "seq_doc_a_customer_across_months",
+      "kind": "sequence",
+      "description": "同一客户的报价序号跨月继续累计",
+      "why": "★ 序号**不带日期** ⇒ 不随月份重置。这正是「该客户第几份」的含义",
+      "steps": [
+        {
+          "op": "make_document_code",
+          "args": [
+            "QT"
+          ],
+          "kwargs": {
+            "customer_code": "A001260922001",
+            "seq": 1
+          },
+          "expect": "A001260922001-QT001"
+        },
+        {
+          "op": "make_document_code",
+          "args": [
+            "QT"
+          ],
+          "kwargs": {
+            "customer_code": "A001260922001",
+            "seq": 2
+          },
+          "expect": "A001260922001-QT002",
+          "comment": "一个月后再报 —— 序号接着 002，不是 001"
+        }
+      ]
+    },
+    {
+      "id": "seq_doc_b_company_daily_pool",
+      "kind": "sequence",
+      "description": "★ B 类是**全公司当日共享流水** —— 与 A 类相反",
+      "why": "这就是 B 类要 4 位、A 类只要 3 位的原因",
+      "steps": [
+        {
+          "op": "make_document_code",
+          "args": [
+            "PO"
+          ],
+          "kwargs": {
+            "issue_date": "2026-10-01",
+            "seq": 1
+          },
+          "expect": "PO2610010001"
+        },
+        {
+          "op": "make_document_code",
+          "args": [
+            "PO"
+          ],
+          "kwargs": {
+            "issue_date": "2026-10-01",
+            "seq": 2
+          },
+          "expect": "PO2610010002"
+        },
+        {
+          "op": "make_document_code",
+          "args": [
+            "PO"
+          ],
+          "kwargs": {
+            "issue_date": "2026-10-01",
+            "seq": 3
+          },
+          "expect": "PO2610010003"
+        },
+        {
+          "op": "make_document_code",
+          "args": [
+            "PO"
+          ],
+          "kwargs": {
+            "issue_date": "2026-10-02",
+            "seq": 1
+          },
+          "expect": "PO2610020001",
+          "comment": "次日流水重置"
+        }
+      ]
+    },
+    {
+      "id": "seq_doc_b_type_separate_pools",
+      "kind": "sequence",
+      "description": "B 类不同类型的流水各成一个池",
+      "why": "分组键含类码",
+      "steps": [
+        {
+          "op": "make_document_code",
+          "args": [
+            "PO"
+          ],
+          "kwargs": {
+            "issue_date": "2026-10-01",
+            "seq": 1
+          },
+          "expect": "PO2610010001"
+        },
+        {
+          "op": "make_document_code",
+          "args": [
+            "QC"
+          ],
+          "kwargs": {
+            "issue_date": "2026-10-01",
+            "seq": 1
+          },
+          "expect": "QC2610010001"
+        },
+        {
+          "op": "make_document_code",
+          "args": [
+            "CK"
+          ],
+          "kwargs": {
+            "issue_date": "2026-10-01",
+            "seq": 1
+          },
+          "expect": "CK2610010001"
+        },
+        {
+          "op": "make_document_code",
+          "args": [
+            "PO"
+          ],
+          "kwargs": {
+            "issue_date": "2026-10-01",
+            "seq": 2
+          },
+          "expect": "PO2610010002"
+        }
+      ]
+    },
+    {
+      "id": "seq_doc_b_discontinuous_is_allowed",
+      "kind": "sequence",
+      "description": "★ B 类流水允许不连续（证明「流水只是一个递增计数，不要求连续」）",
+      "why": "实现方不应假设 `MAX(seq)+1` 一定等于「今天共开了几份」",
+      "steps": [
+        {
+          "op": "make_document_code",
+          "args": [
+            "PO"
+          ],
+          "kwargs": {
+            "issue_date": "2026-10-01",
+            "seq": 1
+          },
+          "expect": "PO2610010001"
+        },
+        {
+          "op": "make_document_code",
+          "args": [
+            "PO"
+          ],
+          "kwargs": {
+            "issue_date": "2026-10-01",
+            "seq": 7
+          },
+          "expect": "PO2610010007",
+          "comment": "中间作废了 4 份 —— 编号不复用、不填补"
+        }
+      ]
+    },
+    {
+      "id": "seq_roundtrip_parse",
+      "kind": "sequence",
+      "description": "往返测试：生成后用校验函数解析回来，类码与客户编号须完全一致",
+      "why": "★ 强化「生成 / 校验」两侧一致性 —— 这是最容易被实现方写歪的地方",
+      "steps": [
+        {
+          "op": "make_document_code",
+          "args": [
+            "QT"
+          ],
+          "kwargs": {
+            "customer_code": "A001260922001",
+            "seq": 1
+          },
+          "expect": "A001260922001-QT001"
+        },
+        {
+          "op": "is_document_code",
+          "args": [
+            "A001260922001-QT001"
+          ],
+          "expect": true
+        },
+        {
+          "op": "make_document_code",
+          "args": [
+            "PO"
+          ],
+          "kwargs": {
+            "issue_date": "2026-10-01",
+            "seq": 12
+          },
+          "expect": "PO2610010012"
+        },
+        {
+          "op": "is_document_code",
+          "args": [
+            "PO2610010012"
+          ],
+          "expect": true
+        },
+        {
+          "op": "make_customer_code",
+          "args": [
+            "A001",
+            "2026-09-22",
+            1
+          ],
+          "expect": "A001260922001"
+        },
+        {
+          "op": "is_customer_code",
+          "args": [
+            "A001260922001"
+          ],
+          "expect": true
+        }
+      ]
+    }
+  ]
+}
