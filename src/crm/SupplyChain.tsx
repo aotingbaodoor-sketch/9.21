@@ -3,6 +3,7 @@ import { useMutation, useResource } from "./api.ts";
 import { useSession } from "./context.tsx";
 import { ErrorBox, Field, Loading, Panel } from "./ui.tsx";
 import { Purchase } from "./PurchaseWorkspace.tsx";
+import { OrderWorkflow, type Workflow } from './OrderWorkflow.tsx';
 export { Purchase } from "./PurchaseWorkspace.tsx";
 
 type Order = {
@@ -72,8 +73,8 @@ export function SupplyChain() {
           </div>
         )}
       </Panel>
-      {user.role === "admin" && <FactoryManager />}
       {id && <OrderView key={id} id={id} />}
+      {user.role === "admin" && <FactoryManager />}
     </>
   );
 }
@@ -220,6 +221,7 @@ export function FactoryManager() {
 function OrderView({ id }: { id: string }) {
   const { user, revision, refresh, notify } = useSession(),
     d = useResource<Detail>(`/supply/orders/${id}`, revision),
+    workflow = useResource<Workflow>(`/supply/orders/${id}/workflow`, revision),
     factories = useResource<Factory[]>("/supply/factories", revision),
     m = useMutation(),
     [factory, setFactory] = useState(""),
@@ -231,6 +233,8 @@ function OrderView({ id }: { id: string }) {
   const x = d.data;
   return (
     <>
+      <ErrorBox message={workflow.error}/>
+      {workflow.data && <OrderWorkflow id={id} data={workflow.data} items={x.items}/>}
       <Panel title={`${x.order.order_number} · ${x.order.company}`}>
         <div className="supply-lines">
           {x.items.map((i) => (
@@ -278,7 +282,7 @@ function OrderView({ id }: { id: string }) {
             </Field>
             <button
               className="primary"
-              disabled={!factory || !items.length || m.busy}
+              disabled={!factory || !items.length || m.busy || !workflow.data?.evidence.depositReceived}
               onClick={() =>
                 void m.run(
                   `/supply/orders/${id}/purchase-orders`,
@@ -296,11 +300,12 @@ function OrderView({ id }: { id: string }) {
                 )
               }
             >
-              拆分工厂订单
+              创建工厂采购草稿
             </button>
           </div>
         )}
         <ErrorBox message={m.error} />
+        {!workflow.data?.evidence.depositReceived && <p role="status">未登记定金到账，不能创建工厂采购草稿。</p>}
       </Panel>
       <Panel title="工厂订单">
         <div className="supply-grid">

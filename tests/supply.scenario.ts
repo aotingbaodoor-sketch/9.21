@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import type { User } from "../shared/contracts.ts";
 import type { fixtures } from "./quoting.fixtures.ts";
+import { prepareTestProduction } from './order-workflow.fixture.ts';
 
 type Agent = { cookie: string; csrf: string; user: User };
 // The harness intentionally accepts arbitrary API response shapes so assertions
@@ -52,6 +53,7 @@ export async function supplyScenario(ctx: {
   const sales = await ok(a, `/supply/orders/${salesId}`);
   assert.equal(sales.order.snapshot, undefined);
   assert.ok(!JSON.stringify(sales).includes("unitPrice"));
+  await prepareTestProduction(ok,admin,salesId,projectId,sales.items);
   const purchaseId = (await ok(admin, `/supply/orders/${salesId}/purchase-orders`, "POST", { factoryId, itemIds: [sales.items[0].id], promisedDate: null })).id;
   const base = `/supply/purchase-orders/${purchaseId}`;
   assert.equal((await request(admin, `/supply/orders/${salesId}/purchase-orders`, "POST", { factoryId, itemIds: [sales.items[0].id], promisedDate: null })).status, 409);
@@ -132,7 +134,12 @@ export async function supplyScenario(ctx: {
   await ok(follow, `${base}/shipments/${s1}/receive`, "POST", { version: 2, evidence: "TEST buyer receipt for first package" });
   assert.notEqual((await ok(a, `/supply/orders/${salesId}`)).order.status, "closed");
   await ok(follow, `${base}/shipments/${s2}/receive`, "POST", { version: 2, evidence: "TEST buyer receipt for remaining packages" });
+  assert.equal((await ok(a, `/supply/orders/${salesId}`)).order.status, "shipped");
+  assert.equal((await ok(a, `/supply/orders/${salesId}/workflow`)).state,'已发货');
+  const installationFile=await ok(admin,`/quoting/projects/${projectId}/files`,'POST',{name:'TEST installation.pdf',mime:'application/pdf',data:Buffer.from('%PDF-1.4\nTEST installation').toString('base64'),kind:'confirmation'});
+  await ok(admin,`/supply/orders/${salesId}/evidence`,'POST',{kind:'installation',fileId:installationFile.id,confirmedAt:new Date().toISOString(),note:'TEST buyer confirmed installation'});
   assert.equal((await ok(a, `/supply/orders/${salesId}`)).order.status, "closed");
+  assert.equal((await ok(a, `/supply/orders/${salesId}/workflow`)).state,'已安装/完结');
   assert.equal((await request(fa, `${base}/updates`, "POST", feedback("packing"))).status, 409);
   pass("质检失败→工厂返工→跟单复核→复检→包装审核→两批发货签收；重复包装、跳过审核与自签收均被拒绝");
 }

@@ -7,6 +7,7 @@ import { ErrorBox, Field, Loading, Panel } from "./ui.tsx";
 
 type Item = {
   id: string;
+  sales_order_item_id: string;
   quantity: number;
   line_key: string;
   configuration_snapshot: Record<string, unknown>;
@@ -33,6 +34,7 @@ type Issue = {
   version: number;
 };
 type Detail = {
+  productionInstruction: {id:string;created_at:string;dimensions:{itemId:string;widthMm:number;heightMm:number}[]}|null;
   order: {
     id: string;
     order_number: string;
@@ -164,15 +166,18 @@ export function Purchase({ id }: { id: string }) {
           </p>
         )}
         <h3>本采购订单产品</h3>
+        {x.productionInstruction ? <p>正式生产指令已下达：{new Date(x.productionInstruction.created_at).toLocaleString()}。生产以以下确认尺寸为准。</p> : <p role="alert">尚无正式生产指令，报价尺寸仅供参考，不可据此投产。</p>}
         {x.items.map((i) => (
           <div className="supply-event" key={i.id}>
             <b>{String(i.configuration_snapshot.sku || i.line_key)}</b> ·{" "}
             {i.quantity} 件
             <p>
+              报价参考：
               {String(i.configuration_snapshot.width)} ×{" "}
               {String(i.configuration_snapshot.height)}{" "}
               {String(i.configuration_snapshot.unit || "mm")}
             </p>
+            {x.productionInstruction?.dimensions.filter(line=>line.itemId===i.sales_order_item_id).map(line=><p key={line.itemId}><strong>最终生产尺寸：{line.widthMm} × {line.heightMm} mm</strong></p>)}
             <p>
               {Object.entries(
                 (i.configuration_snapshot.specs || {}) as Record<

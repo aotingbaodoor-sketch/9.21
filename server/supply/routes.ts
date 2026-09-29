@@ -20,6 +20,7 @@ import {
   purchaseJoins,
 } from "./access.ts";
 import { registerFulfillment } from "./fulfillment.ts";
+import { orderWorkflow, recordOrderEvidence, requireOrderDraft, requireOrderExecution } from "./order-workflow.ts";
 import {
   editableProduct,
   registerCatalogImages,
@@ -88,6 +89,18 @@ export function registerSupplyRoutes(
 ) {
   registerFulfillment(app, pool, mutate);
   registerCatalogImages(app, pool, mutate);
+  app.get('/api/supply/orders/:id/workflow', async (req,res) => {
+    const order=await salesOrder(pool,req.actor,uid(req.params.id));
+    const result=await orderWorkflow(pool,order.id);
+    res.json({state:result.state,projectId:result.quote.project_id,evidence:result.evidence,events:result.events,
+      records:result.records.map(({data,...record})=>({...record,...(req.actor.role==='admin'?{data}:{})}))});
+  });
+  app.post('/api/supply/orders/:id/evidence', async (req,res) => mutate(req,res,async db=> {
+    const order=await salesOrder(db,req.actor,uid(req.params.id));
+    const result=await recordOrderEvidence(db,req.actor,order.id,req.body);
+    await repo.audit(db,req.actor,'登记订单履约证据',order.id,{evidenceId:result.id,state:result.state});
+    return result;
+  }));
   app.get("/api/supply/orders", async (req, res) => {
     const rows = (
       await pool.query(
@@ -471,6 +484,7 @@ export function registerSupplyRoutes(
       await db.query("SELECT id FROM sales_orders WHERE id=$1 FOR UPDATE", [
         order.id,
       ]);
+      await requireOrderDraft(db, order.id);
       const input = z
         .object({
           factoryId: z.uuid(),
@@ -566,8 +580,10 @@ export function registerSupplyRoutes(
         [order.id],
       ),
     ]);
+    const instruction=(await pool.query("SELECT id,created_at,data->'dimensions'->'lines' AS dimensions FROM order_evidence WHERE sales_order_id=$1 AND kind='instruction'",[order.sales_order_id])).rows[0] ?? null;
     res.json({
       order: publicPurchase(order, req.actor),
+      productionInstruction: instruction ? {...instruction,dimensions:instruction.dimensions.filter((line:{itemId:string})=>items.rows.some(i=>i.sales_order_item_id===line.itemId))} : null,
       items: items.rows.map((i) => ({
         ...i,
         configuration_snapshot: productionConfiguration(
@@ -584,7 +600,8 @@ export function registerSupplyRoutes(
       if (req.actor.role !== "factory")
         throw new HttpError(403, "只有对应工厂账号可确认接单");
       const purchaseOrderId = uid(req.params.id);
-      await purchaseOrder(db, req.actor, purchaseOrderId, true);
+      const purchase = await purchaseOrder(db, req.actor, purchaseOrderId, true);
+      await requireOrderExecution(db, purchase.sales_order_id);
       const input = z
         .object({
           price: z.number().min(0).max(1e12),

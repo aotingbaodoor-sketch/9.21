@@ -13,6 +13,7 @@ import { calculate, policy, publicCalculation } from "./engine.ts";
 import { renderQuotePdf } from "./pdf.ts";
 import { importLines } from "./spreadsheet.ts";
 import type { QuoteRow } from "./types.ts";
+import { syncOrderMilestones } from '../supply/order-workflow.ts';
 
 type Mutate = (req: Request, res: Response, run: (db: pg.PoolClient) => Promise<unknown>) => Promise<void>;
 type Project = { id: string; customer_id: string; name: string; version: number; company: string; owner_id: string };
@@ -195,6 +196,7 @@ export function registerQuoting(app: Express, pool: pg.Pool, mutate: Mutate) {
     await db.query("INSERT INTO quotation_orders(id,project_id,quote_id,snapshot,created_by) VALUES($1,$2,$3,$4,$5)", [orderId, p.id, q.id, JSON.stringify({ input: q.input, calculation: q.snapshot, customer: q.customer_snapshot, confirmation: input }), req.actor.id]);
     const salesOrderId = randomUUID(), salesOrderNumber = `SO-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${orderId.slice(0, 6).toUpperCase()}`;
     await db.query("INSERT INTO sales_orders(id,quotation_order_id,order_number,created_by) VALUES($1,$2,$3,$4)", [salesOrderId, orderId, salesOrderNumber, req.actor.id]);
+    await syncOrderMilestones(db,salesOrderId,req.actor);
     for (const line of q.input.lines) await db.query("INSERT INTO sales_order_items(id,sales_order_id,line_key,configuration_snapshot,quantity) VALUES($1,$2,$3,$4,$5)", [randomUUID(), salesOrderId, line.key, JSON.stringify(line), line.quantity]);
     await db.query("INSERT INTO quotation_reviews(id,quote_id,discipline) VALUES($1,$2,'production')", [randomUUID(), q.id]); await repo.audit(db, req.actor, "确认报价并生成订单", orderId, { quoteId: q.id, contact: input.contact }); return { id: orderId };
   }));

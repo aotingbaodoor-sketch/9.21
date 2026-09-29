@@ -11,6 +11,7 @@ import {
 import { businessDay, HttpError, requireAdmin } from "../domain.ts";
 import * as repo from "../repository.ts";
 import { purchaseOrder, operator, reviewer, type SupplyDb } from "./access.ts";
+import { requireOrderExecution, syncOrderMilestones } from "./order-workflow.ts";
 
 type Mutate = (
   req: Request,
@@ -20,12 +21,13 @@ type Mutate = (
 const id = (req: Request) => z.uuid().parse(req.params.id);
 const version = z.number().int().positive();
 const note = z.string().trim().min(2).max(3000);
-function active(order: Record<string, unknown>) {
+async function active(db:SupplyDb, order: Record<string, unknown>) {
   if (
     !order.factory_confirmed_at ||
     ["draft", "sent", "cancelled", "shipped"].includes(String(order.status))
   )
     throw new HttpError(409, "订单尚未接单或已结束，不能继续修改生产数据");
+  await requireOrderExecution(db,String(order.sales_order_id));
 }
 async function orderedQuantity(db: SupplyDb, orderId: string) {
   return Number(
@@ -38,6 +40,9 @@ async function orderedQuantity(db: SupplyDb, orderId: string) {
   );
 }
 async function shippingReady(db: SupplyDb, orderId: string) {
+  const order=(await db.query('SELECT sales_order_id FROM purchase_orders WHERE id=$1',[orderId])).rows[0];
+  if(!order) throw new HttpError(404,'工厂订单不存在');
+  await requireOrderExecution(db,order.sales_order_id);
   const quality = (
     await db.query(
       "SELECT status,inspected_at FROM quality_inspections WHERE purchase_order_id=$1 ORDER BY inspected_at DESC,id DESC LIMIT 1",
@@ -82,8 +87,9 @@ async function syncShipmentState(db: SupplyDb, orderId: string) {
   );
   if (summary.received >= total)
     await db.query(
-      `UPDATE sales_orders so SET status='closed',updated_at=now(),version=version+1
+      `UPDATE sales_orders so SET status='shipped',updated_at=now(),version=version+1
     WHERE so.id=(SELECT sales_order_id FROM purchase_orders WHERE id=$1)
+      AND so.status<>'closed'
       AND NOT EXISTS(SELECT 1 FROM sales_order_items si WHERE si.sales_order_id=so.id AND NOT EXISTS(
         SELECT 1 FROM purchase_order_items pi JOIN purchase_orders po ON po.id=pi.purchase_order_id WHERE pi.sales_order_item_id=si.id AND po.status='shipped'))
       AND NOT EXISTS(SELECT 1 FROM purchase_orders po JOIN shipments s ON s.purchase_order_id=po.id WHERE po.sales_order_id=so.id AND s.status<>'received')`,
@@ -207,7 +213,7 @@ export function registerFulfillment(
     mutate(req, res, async (db) => {
       const order = await purchaseOrder(db, req.actor, id(req), true);
       operator(req.actor);
-      active(order);
+      await active(db,order);
       const input = z
         .object({
           stage: z.enum(productionStages),
@@ -251,7 +257,7 @@ export function registerFulfillment(
       mutate(req, res, async (db) => {
         const order = await purchaseOrder(db, req.actor, id(req), true);
         reviewer(req.actor);
-        active(order);
+        await active(db,order);
         const input = reviewSchema.parse(req.body),
           updateId = z.uuid().parse(req.params.updateId);
         const row = (
@@ -297,7 +303,7 @@ export function registerFulfillment(
     mutate(req, res, async (db) => {
       const order = await purchaseOrder(db, req.actor, id(req), true);
       operator(req.actor);
-      active(order);
+      await active(db,order);
       const input = z
           .object({
             severity: z.enum(["low", "medium", "high", "critical"]),
@@ -341,7 +347,7 @@ export function registerFulfillment(
     mutate(req, res, async (db) => {
       const order = await purchaseOrder(db, req.actor, id(req), true);
       reviewer(req.actor);
-      active(order);
+      await active(db,order);
       const input = z
         .object({
           status: z.enum(["passed", "failed", "conditional"]),
@@ -402,7 +408,7 @@ export function registerFulfillment(
     async (req, res) =>
       mutate(req, res, async (db) => {
         const order = await purchaseOrder(db, req.actor, id(req), true);
-        active(order);
+        await active(db,order);
         if (req.actor.role !== "factory")
           throw new HttpError(403, "返工结果由对应工厂账号提交");
         const input = z.object({ version, note }).parse(req.body);
@@ -427,7 +433,7 @@ export function registerFulfillment(
       mutate(req, res, async (db) => {
         const order = await purchaseOrder(db, req.actor, id(req), true);
         reviewer(req.actor);
-        active(order);
+        await active(db,order);
         const input = reviewSchema.parse(req.body);
         const row = await db.query(
           "UPDATE rework_tasks SET status=$3,review_note=$4,reviewed_by=$5,reviewed_at=now(),version=version+1 WHERE id=$1 AND purchase_order_id=$2 AND status='submitted' AND version=$6 RETURNING id",
@@ -451,7 +457,7 @@ export function registerFulfillment(
     mutate(req, res, async (db) => {
       const order = await purchaseOrder(db, req.actor, id(req), true);
       operator(req.actor);
-      active(order);
+      await active(db,order);
       const input = packageSchema.parse(req.body);
       for (const item of input.items) {
         const line = (
@@ -503,7 +509,7 @@ export function registerFulfillment(
     mutate(req, res, async (db) => {
       const order = await purchaseOrder(db, req.actor, id(req), true);
       operator(req.actor);
-      active(order);
+      await active(db,order);
       const input = shipmentSchema.parse(req.body);
       const packages = await db.query(
         "SELECT id FROM shipment_packages WHERE purchase_order_id=$1 AND id=ANY($2::uuid[])",
@@ -552,7 +558,7 @@ export function registerFulfillment(
       mutate(req, res, async (db) => {
         const order = await purchaseOrder(db, req.actor, id(req), true);
         reviewer(req.actor);
-        active(order);
+        await active(db,order);
         const v = version.parse(req.body.version),
           shipmentId = z.uuid().parse(req.params.shipmentId);
         await shippingReady(db, order.id);
@@ -591,6 +597,7 @@ export function registerFulfillment(
         );
         if (!changed.rowCount) throw new HttpError(409, "发货单不存在或已发出");
         await syncShipmentState(db, order.id);
+        await syncOrderMilestones(db,order.sales_order_id,req.actor);
         await repo.audit(db, req.actor, "审核并确认分批发货", shipmentId, {
           orderId: order.id,
         });
@@ -614,6 +621,7 @@ export function registerFulfillment(
         if (!row.rowCount)
           throw new HttpError(409, "仅已发货且未签收的批次可登记签收");
         await syncShipmentState(db, order.id);
+        await syncOrderMilestones(db,order.sales_order_id,req.actor);
         await repo.audit(db, req.actor, "核实并记录签收", shipmentId, {
           evidence: input.evidence,
         });

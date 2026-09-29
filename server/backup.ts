@@ -50,6 +50,8 @@ const tables = [
   "factory_product_images",
   "sales_orders",
   "sales_order_items",
+  "order_evidence",
+  "order_milestone_events",
   "purchase_orders",
   "purchase_order_items",
   "production_updates",
