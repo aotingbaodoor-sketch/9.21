@@ -48,6 +48,7 @@ const tables = [
   "quotation_files",
   "quotation_reviews",
   "quotation_orders",
+  "quotation_deposits",
   "quotation_documents",
   "quotation_bundles",
   "factories",

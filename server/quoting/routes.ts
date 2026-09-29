@@ -13,7 +13,7 @@ import { calculate, policy, publicCalculation } from "./engine.ts";
 import { renderQuotePdf } from "./pdf.ts";
 import { importLines } from "./spreadsheet.ts";
 import type { QuoteRow } from "./types.ts";
-import { syncOrderMilestones } from '../supply/order-workflow.ts';
+import { receiveQuoteDeposit,openPaidSalesOrder } from './deposit.ts';
 import { issueCustomerQuote, requireQuoteCustomer } from './customer-lifecycle.ts';
 
 type Mutate = (req: Request, res: Response, run: (db: pg.PoolClient) => Promise<unknown>) => Promise<void>;
@@ -137,7 +137,9 @@ export function registerQuoting(app: Express, pool: pg.Pool, mutate: Mutate) {
   app.get("/api/quoting/versions/:id", async (req, res) => {
     const { q } = await quote(pool, req.actor, id(req)), settings = (await getQuoteSettings(pool)).data;
     const [reviews, documents] = await Promise.all([pool.query("SELECT id,discipline,assigned_to,status,comment,file_id,version FROM quotation_reviews WHERE quote_id=$1", [q.id]), pool.query("SELECT id,kind,language,sha256,created_at FROM quotation_documents WHERE quote_id=$1", [q.id])]);
-    res.json({ ...q, docNo:q.doc_no ?? null, snapshot: publicCalculation(q.snapshot, policy(settings, req.actor)), reviews: reviews.rows, documents: documents.rows });
+    const payment=(await pool.query(`SELECT d.id,r.doc_no FROM quotation_orders o JOIN quotation_deposits d ON d.quotation_order_id=o.id JOIN crm_document_registry r ON r.id=d.document_id WHERE o.quote_id=$1`,[q.id])).rows[0] ?? null;
+    const salesOrder=(await pool.query('SELECT s.id,s.order_number FROM quotation_orders o JOIN sales_orders s ON s.quotation_order_id=o.id WHERE o.quote_id=$1',[q.id])).rows[0] ?? null;
+    res.json({ ...q, docNo:q.doc_no ?? null, payment, salesOrder, snapshot: publicCalculation(q.snapshot, policy(settings, req.actor)), reviews: reviews.rows, documents: documents.rows });
   });
   app.post("/api/quoting/versions/:id/submit", async (req, res) => mutate(req, res, async db => {
     const { q } = await quote(db, req.actor, id(req), true); repo.checkVersion(q, req.body.version);
@@ -198,11 +200,15 @@ export function registerQuoting(app: Express, pool: pg.Pool, mutate: Mutate) {
     if (latest.id !== q.id) throw new HttpError(409, "已有新版报价，请确认最新版本");
     const orderId = randomUUID(); await db.query("UPDATE quotation_versions SET status='confirmed',confirmed_at=now(),confirmation=$2,version=version+1 WHERE id=$1", [q.id, JSON.stringify(input)]);
     await db.query("INSERT INTO quotation_orders(id,project_id,quote_id,snapshot,created_by) VALUES($1,$2,$3,$4,$5)", [orderId, p.id, q.id, JSON.stringify({ input: q.input, calculation: q.snapshot, customer: q.customer_snapshot, confirmation: input }), req.actor.id]);
-    const salesOrderId = randomUUID(), salesOrderNumber = `SO-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${orderId.slice(0, 6).toUpperCase()}`;
-    await db.query("INSERT INTO sales_orders(id,quotation_order_id,order_number,created_by) VALUES($1,$2,$3,$4)", [salesOrderId, orderId, salesOrderNumber, req.actor.id]);
-    await syncOrderMilestones(db,salesOrderId,req.actor);
-    for (const line of q.input.lines) await db.query("INSERT INTO sales_order_items(id,sales_order_id,line_key,configuration_snapshot,quantity) VALUES($1,$2,$3,$4,$5)", [randomUUID(), salesOrderId, line.key, JSON.stringify(line), line.quantity]);
-    await db.query("INSERT INTO quotation_reviews(id,quote_id,discipline) VALUES($1,$2,'production')", [randomUUID(), q.id]); await repo.audit(db, req.actor, "确认报价并生成订单", orderId, { quoteId: q.id, contact: input.contact }); return { id: orderId };
+    await repo.audit(db, req.actor, "记录客户报价确认（未开立SO）", orderId, { quoteId: q.id, contact: input.contact }); return { id: orderId };
+  }));
+  for(const action of ['deposit','sales-order'] as const) app.post(`/api/quoting/versions/:id/${action}`,async(req,res)=>mutate(req,res,async db=>{
+    requireAdmin(req.actor);
+    const {q,p}=await quote(db,req.actor,id(req),true);
+    const order=(await db.query('SELECT id FROM quotation_orders WHERE quote_id=$1 FOR UPDATE',[q.id])).rows[0];
+    if(!order || q.status!=='confirmed') throw new HttpError(409,'须先记录客户报价确认');
+    const base={orderId:order.id,customerId:p.customer_id,date:businessDay((await repo.settings(db)).timezone),requestKey:z.uuid().parse(req.get('idempotency-key'))};
+    return action==='deposit' ? receiveQuoteDeposit(db,req.actor,{...base,raw:req.body}) : openPaidSalesOrder(db,req.actor,{...base,quote:q});
   }));
   app.post("/api/quoting/projects/:id/files", async (req, res) => mutate(req, res, async db => {
     const input = z.object({ name: z.string().min(1).max(160), mime: z.enum(["application/pdf", "image/png", "image/jpeg"]), data: z.string().max(2700000), kind: z.enum(["reference", "technical", "confirmation"]), taskId: z.uuid().optional() }).parse(req.body);

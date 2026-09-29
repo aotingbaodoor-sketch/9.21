@@ -120,7 +120,7 @@ try {
     [quoteOrder, projectId, quoteId, adminId],
   );
   await pool.query(
-    "INSERT INTO sales_orders(id,quotation_order_id,order_number,created_by) VALUES($1,$2,'TEST-ORDER',$3)",
+    "INSERT INTO sales_orders(id,quotation_order_id,order_number,created_by,deposit_gate_required) VALUES($1,$2,'TEST-ORDER',$3,false)",
     [orderId, quoteOrder, adminId],
   );
   await pool.query(

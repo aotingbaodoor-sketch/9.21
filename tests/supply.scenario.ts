@@ -43,6 +43,8 @@ export async function supplyScenario(ctx: {
   await ok(a, `/quoting/versions/${quoteId}/issue`, "POST", { version: quote.version });
   quote = await ok(a, `/quoting/versions/${quoteId}`);
   const confirmed = await ok(a, `/quoting/versions/${quoteId}/confirm`, "POST", { version: quote.version, contact: "TEST buyer", evidence: "TEST buyer approved factory-origin product configuration" });
+  await ok(admin,`/quoting/versions/${quoteId}/deposit`,'POST',{kind:'deposit',amount:10,currency:'USD',receivedAt:new Date().toISOString(),reference:'ISOLATED TEST received deposit'});
+  await ok(admin,`/quoting/versions/${quoteId}/sales-order`,'POST',{});
   const orders = await ok(admin, "/supply/orders");
   let salesId = "";
   for (const row of orders) {

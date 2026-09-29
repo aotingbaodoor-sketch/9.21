@@ -109,7 +109,7 @@ export function createApp(pool: pg.Pool, options: Options) {
   });
   app.get("/api/health", async (_req, res) => {
     await pool.query("SELECT 1");
-    res.json({ status: "ok" });
+    res.json({ status: "ok",version:process.env.RAILWAY_GIT_COMMIT_SHA || process.env.APP_VERSION || null });
   });
   app.use("/api", (req, _res, next) => {
     if (

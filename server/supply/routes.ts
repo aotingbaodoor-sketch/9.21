@@ -10,7 +10,8 @@ import {
   factoryReadiness,
 } from "../../shared/factory.ts";
 import { productSchema } from "../../shared/quoting.ts";
-import { hashPassword, HttpError, requireAdmin } from "../domain.ts";
+import { hashPassword, HttpError, requireAdmin,businessDay } from "../domain.ts";
+import {registerDocumentInTransaction} from '../document-registry.ts';
 import * as repo from "../repository.ts";
 import {
   purchaseOrder,
@@ -519,7 +520,8 @@ export function registerSupplyRoutes(
       )
         throw new HttpError(409, "所选产品已有采购订单，不能重复分配");
       const poId = randomUUID();
-      const number = `PO-${order.order_number.replace(/^SO-/, "")}-${String(Date.now()).slice(-6)}`;
+      const registered=await registerDocumentInTransaction(db,{classCode:'PO',customerIds:[order.customer_id],date:businessDay((await repo.settings(db)).timezone),businessKind:'purchase_order',businessId:poId,requestKey:z.uuid().parse(req.get('idempotency-key')),actorId:req.actor.id},async()=>{});
+      const number = registered.doc_no;
       await db.query(
         "INSERT INTO purchase_orders(id,sales_order_id,factory_id,order_number,promised_date,created_by) VALUES($1,$2,$3,$4,$5,$6)",
         [
