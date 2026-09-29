@@ -13,4 +13,6 @@ export type QuoteRow = {
   created_at: Date;
   created_by: string;
   previous_total: string | null;
+  registered_document_id?: string | null;
+  doc_no?: string | null;
 };

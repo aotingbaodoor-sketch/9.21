@@ -11,7 +11,9 @@ export function quoteHtml(q: QuoteRow, kind: "quotation" | "pi" | "contract", la
   const money = (n: number | null) => n === null ? "PENDING" : `${f.currency} ${n.toFixed(2)}`;
   const title = kind === "quotation" ? tr("报价单", "QUOTATION") : kind === "pi" ? tr("形式发票", "PROFORMA INVOICE") : tr("销售合同", "SALES CONTRACT");
   const draft = kind === "contract" && (!s.contractApproved || (language !== "en" && !s.contractZh) || (language !== "zh" && !s.contractEn));
-  const number = `QT-${q.id.slice(0, 8).toUpperCase()}-V${q.number}`, mode = f.freightDisplay, freight = c.freightTotal || 0;
+  if (q.registered_document_id && !q.doc_no) throw new HttpError(409,'已登记的报价编号缺失，拒绝临时生成替代编号');
+  // Legacy documents retain their old display; newly issued QT uses its permanent registry value.
+  const number = q.doc_no || `QT-${q.id.slice(0, 8).toUpperCase()}-V${q.number}`, mode = f.freightDisplay, freight = c.freightTotal || 0;
   let allocated = 0;
   const rows = c.lines.map((l, i) => {
     const share = mode !== "allocated" ? 0 : i === c.lines.length - 1 ? round(new Decimal(freight).minus(allocated)) : round(new Decimal(freight).mul(c.productTotal ? l.productTotal / c.productTotal : 1 / c.lines.length));

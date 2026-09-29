@@ -3,7 +3,14 @@ import assert from "node:assert/strict";
 import { calculate, policy, publicCalculation } from "../server/quoting/engine.ts";
 import { fixtures,today } from "./quoting.fixtures.ts";
 import { quoteInputSchema } from "../shared/quoting.ts";
+import { quoteHtml } from '../server/quoting/pdf.ts';
+import type { QuoteRow } from '../server/quoting/types.ts';
 function calc(){const f=fixtures();return{...f,run:()=>calculate(f.input,[f.product],f.freight,f.settings,policy(f.settings,{id:"test",role:"sales"}),today,"project")};}
+test('new quotation PDF uses permanent registered QT, never a recomputed display number',()=>{
+ const f=calc(); const q:QuoteRow={id:'test-quote',project_id:'project',number:1,version:1,status:'issued',input:f.input,snapshot:f.run(),customer_snapshot:{company:'TEST',contact:'TEST',email:'',country:'UAE'},reason:'TEST',created_at:new Date(),created_by:'test',previous_total:null,registered_document_id:'test-registry',doc_no:'A001260922001-QT001'};
+ assert.ok(quoteHtml(q,'quotation','both').includes(q.doc_no!));
+ assert.throws(()=>quoteHtml({...q,doc_no:null},'quotation','both'),/拒绝临时生成/);
+});
 test("3 test sliding doors: area, package, weight, freight, decimal total",()=>{const f=calc(),c=f.run();assert.equal(c.productTotal,600);assert.equal(c.packingTotal,58.33);assert.equal(c.cbm,1.89);assert.equal(c.grossKg,303);assert.equal(c.freightTotal,42.29);assert.equal(c.total,700.62);assert.deepEqual(c.issues,[]);});
 test("mm/cm/m equivalent and minimum billing area",()=>{const f=calc(),base=f.run().total;f.input.lines[0].unit="cm";f.input.lines[0].width=200;f.input.lines[0].height=240;assert.equal(f.run().total,base);f.input.lines[0].unit="m";f.input.lines[0].width=2;f.input.lines[0].height=2.4;assert.equal(f.run().total,base);f.product.minArea=6;assert.equal(f.run().lines[0].billedArea,6);});
 test("missing, expired and mismatched freight cannot become zero",()=>{const f=calc();f.freight.validUntil="2020-01-01";assert.equal(f.run().total,null);f.freight.validUntil=f.input.validUntil;f.freight.country="UK";assert.equal(f.run().freightTotal,null);});

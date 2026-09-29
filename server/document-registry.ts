@@ -9,10 +9,13 @@ type Input = { classCode: string; customerIds: string[]; date: string; businessK
  * The callback inserts the real business document in the SAME transaction; retries never invoke it twice.
  */
 export async function registerDocument(pool: pg.Pool, input: Input, persist: (db: pg.PoolClient, document: {id:string; doc_no:string})=>Promise<void>) {
+  return transaction(pool,db=>registerDocumentInTransaction(db,input,persist));
+}
+/** Caller owns a transaction, including the business write and lifecycle audit. */
+export async function registerDocumentInTransaction(db: pg.PoolClient, input: Input, persist: (db: pg.PoolClient, document: {id:string; doc_no:string})=>Promise<void>) {
   const customers = [...new Set(input.customerIds)].sort();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) throw new HttpError(400,'单据业务日必须为 YYYY-MM-DD');
   const fingerprint = createHash('sha256').update(JSON.stringify([input.classCode,customers,input.date,input.businessKind,input.businessId,input.actorId])).digest('hex');
-  return transaction(pool,async db => {
     // Fixed lock order serializes both request replay and duplicate business identity.
     const locks = [`doc-request:${input.requestKey}`,`doc-business:${input.classCode}:${input.businessKind}:${input.businessId}`].sort();
     for (const lock of locks) await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[lock]);
@@ -42,7 +45,6 @@ export async function registerDocument(pool: pg.Pool, input: Input, persist: (db
     await persist(db,{id,doc_no:docNo});
     await db.query('INSERT INTO audit_logs(id,user_id,action,entity_id,details) VALUES($1,$2,$3,$4,$5)',[randomUUID(),input.actorId,'document.number.issued',id,JSON.stringify({docNo,classCode:config.code,businessId:input.businessId})]);
     return {id,doc_no:docNo};
-  });
 }
 /** Deliberately no process cache: updates apply on the next business request. */
 export async function runtimeConfig(db: Db) {

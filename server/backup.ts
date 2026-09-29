@@ -15,6 +15,7 @@ const tables = [
   "crm_document_sequence",
   "crm_document_registry",
   "crm_document_customer_link",
+  "crm_customer_status_events",
   "crm_runtime_config",
   "follow_up_records",
   "notifications",

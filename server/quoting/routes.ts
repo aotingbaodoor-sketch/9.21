@@ -14,6 +14,7 @@ import { renderQuotePdf } from "./pdf.ts";
 import { importLines } from "./spreadsheet.ts";
 import type { QuoteRow } from "./types.ts";
 import { syncOrderMilestones } from '../supply/order-workflow.ts';
+import { issueCustomerQuote, requireQuoteCustomer } from './customer-lifecycle.ts';
 
 type Mutate = (req: Request, res: Response, run: (db: pg.PoolClient) => Promise<unknown>) => Promise<void>;
 type Project = { id: string; customer_id: string; name: string; version: number; company: string; owner_id: string };
@@ -26,7 +27,7 @@ export async function getQuoteSettings(db: Db) {
 }
 async function project(db: Db, actor: User, projectId: string, lock = false): Promise<Project> {
   sales(actor);
-  const r = (await db.query(`SELECT p.*,c.company,c.owner_id FROM quotation_projects p JOIN customers c ON c.id=p.customer_id WHERE p.id=$1 AND c.deleted_at IS NULL AND ($2='admin' OR (c.owner_id=$3 AND NOT c.wa_needs_assignment)) ${lock ? "FOR UPDATE OF p,c" : ""}`, [projectId, actor.role, actor.id])).rows[0];
+  const r = (await db.query(`SELECT p.*,c.company,c.owner_id,c.biz_status,c.crm_customer_code FROM quotation_projects p JOIN customers c ON c.id=p.customer_id WHERE p.id=$1 AND c.deleted_at IS NULL AND ($2='admin' OR (c.owner_id=$3 AND NOT c.wa_needs_assignment)) ${lock ? "FOR UPDATE OF p,c" : ""}`, [projectId, actor.role, actor.id])).rows[0];
   if (!r) throw new HttpError(404, "项目不存在或无权访问"); return r;
 }
 async function quote(db: Db, actor: User, quoteId: string, lock = false) {
@@ -35,6 +36,7 @@ async function quote(db: Db, actor: User, quoteId: string, lock = false) {
   const p = await project(db, actor, q.project_id, lock);
   // Project lock serializes version creation, workflow actions, PDF commits and customer reassignment.
   const current = lock ? (await db.query("SELECT * FROM quotation_versions WHERE id=$1 FOR UPDATE", [quoteId])).rows[0] as QuoteRow : q;
+  if (current.registered_document_id) current.doc_no=(await db.query('SELECT doc_no FROM crm_document_registry WHERE id=$1',[current.registered_document_id])).rows[0]?.doc_no;
   return { q: current, p };
 }
 async function compute(db: Db, actor: User, p: Project, input: QuoteInput) {
@@ -125,6 +127,7 @@ export function registerQuoting(app: Express, pool: pg.Pool, mutate: Mutate) {
   });
   app.post("/api/quoting/projects/:id/versions", async (req, res) => mutate(req, res, async db => {
     const p = await project(db, req.actor, id(req), true); repo.checkVersion(p, req.body.baseVersion);
+    await requireQuoteCustomer(db,p.customer_id);
     if ((await db.query("SELECT 1 FROM quotation_orders WHERE project_id=$1", [p.id])).rowCount) throw new HttpError(409, "已转订单的项目不能修改，请新建项目记录变更订单");
     const input = quoteInputSchema.parse(req.body.input), reason = z.string().trim().min(1).max(1000).parse(req.body.reason), c = await compute(db, req.actor, p, input), customer = await repo.customer(db, req.actor, p.customer_id);
     const prior = (await db.query("SELECT number,snapshot->>'total' total FROM quotation_versions WHERE project_id=$1 ORDER BY number DESC LIMIT 1", [p.id])).rows[0], quoteId = randomUUID();
@@ -134,7 +137,7 @@ export function registerQuoting(app: Express, pool: pg.Pool, mutate: Mutate) {
   app.get("/api/quoting/versions/:id", async (req, res) => {
     const { q } = await quote(pool, req.actor, id(req)), settings = (await getQuoteSettings(pool)).data;
     const [reviews, documents] = await Promise.all([pool.query("SELECT id,discipline,assigned_to,status,comment,file_id,version FROM quotation_reviews WHERE quote_id=$1", [q.id]), pool.query("SELECT id,kind,language,sha256,created_at FROM quotation_documents WHERE quote_id=$1", [q.id])]);
-    res.json({ ...q, snapshot: publicCalculation(q.snapshot, policy(settings, req.actor)), reviews: reviews.rows, documents: documents.rows });
+    res.json({ ...q, docNo:q.doc_no ?? null, snapshot: publicCalculation(q.snapshot, policy(settings, req.actor)), reviews: reviews.rows, documents: documents.rows });
   });
   app.post("/api/quoting/versions/:id/submit", async (req, res) => mutate(req, res, async db => {
     const { q } = await quote(db, req.actor, id(req), true); repo.checkVersion(q, req.body.version);
@@ -184,7 +187,8 @@ export function registerQuoting(app: Express, pool: pg.Pool, mutate: Mutate) {
     if (q.status !== "approved" || q.snapshot.issues.some(i => i.hard) || q.snapshot.total === null || q.snapshot.validThrough < today) throw new HttpError(422, "报价未通过全部审核、缺少数据或已过期");
     const latest = (await db.query("SELECT id FROM quotation_versions WHERE project_id=$1 ORDER BY number DESC LIMIT 1", [p.id])).rows[0];
     if (latest.id !== q.id) throw new HttpError(409, "只能发布最新版本");
-    await db.query("UPDATE quotation_versions SET status='issued',issued_at=now(),version=version+1 WHERE id=$1", [q.id]); await repo.audit(db, req.actor, "正式发布报价", q.id); return { id: q.id };
+    const document=await issueCustomerQuote(db,{customerId:p.customer_id,quoteId:q.id,actorId:req.actor.id,date:today,requestKey:z.uuid().parse(req.get('idempotency-key'))});
+    await repo.audit(db, req.actor, "正式发布报价", q.id,{docNo:document.doc_no}); return { id: q.id,docNo:document.doc_no };
   }));
   app.post("/api/quoting/versions/:id/confirm", async (req, res) => mutate(req, res, async db => {
     const { q, p } = await quote(db, req.actor, id(req), true); repo.checkVersion(q, req.body.version);

@@ -109,6 +109,33 @@ try {
     return {Cookie:response.headers.get('set-cookie')!.split(';')[0],'X-CSRF-Token':data.csrf,Origin:origin,'Content-Type':'application/json','Idempotency-Key':randomUUID()};
   }
   const adminHeaders=await login('codes@test.invalid'), salesHeaders=await login('codes2@test.invalid');
+  // Isolated approved quotation fixture: exercise the real authenticated issue endpoint.
+  const projectId=randomUUID(), quoteId=randomUUID();
+  await pool.query('INSERT INTO quotation_projects(id,customer_id,name,created_by) VALUES($1,$2,$3,$4)',[projectId,one,'QT lifecycle isolated fixture',user]);
+  await pool.query("INSERT INTO quotation_versions(id,project_id,number,input,snapshot,customer_snapshot,reason,created_by,status) VALUES($1,$2,1,'{}',$3,'{}','isolated approved fixture',$4,'approved')",[quoteId,projectId,JSON.stringify({issues:[],total:100,validThrough:'2099-12-31'}),user]);
+  const issueHeaders={...adminHeaders,'Idempotency-Key':randomUUID()};
+  const issueUrl=origin+'/api/quoting/versions/'+quoteId+'/issue';
+  assert.equal((await fetch(issueUrl,{method:'POST',headers:salesHeaders,body:JSON.stringify({version:1})})).status,404);
+  const issued=await Promise.all(Array.from({length:2},()=>fetch(issueUrl,{method:'POST',headers:issueHeaders,body:JSON.stringify({version:1})})));
+  for(const response of issued) assert.equal(response.status,200);
+  const firstIssue=await issued[0].json(); assert.deepEqual(await issued[1].json(),firstIssue);
+  assert.equal(firstIssue.docNo,'A001260926045-QT022');
+  assert.equal((await pool.query('SELECT biz_status FROM customers WHERE id=$1',[one])).rows[0].biz_status,'已报价');
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM crm_customer_status_events WHERE customer_id=$1',[one])).rows[0].n,1);
+  const transition=(await pool.query("SELECT details FROM audit_logs WHERE action='客户业务状态推进' AND entity_id=$1",[one])).rows[0].details;
+  assert.equal(transition.trigger_doc_no,firstIssue.docNo);
+  await assert.rejects(pool.query('UPDATE quotation_versions SET registered_document_id=NULL WHERE id=$1',[quoteId]),/不可更换/);
+  const blockedQuote=randomUUID();
+  await pool.query("INSERT INTO quotation_versions(id,project_id,number,input,snapshot,customer_snapshot,reason,created_by,status) VALUES($1,$2,2,'{}',$3,'{}','blocked fixture',$4,'approved')",[blockedQuote,projectId,JSON.stringify({issues:[],total:100,validThrough:'2099-12-31'}),user]);
+  for(const state of ['已发货','已安装',null]) {
+    // Test-only direct state fixture; no production state-edit endpoint is exposed.
+    await pool.query('UPDATE customers SET biz_status=$2 WHERE id=$1',[one,state]);
+    const r=await fetch(origin+'/api/quoting/versions/'+blockedQuote+'/issue',{method:'POST',headers:{...adminHeaders,'Idempotency-Key':randomUUID()},body:JSON.stringify({version:1})});
+    assert.equal(r.status,409);
+  }
+  await pool.query("UPDATE customers SET biz_status='已报价' WHERE id=$1",[one]);
+  assert.equal((await pool.query('SELECT registered_document_id FROM quotation_versions WHERE id=$1',[blockedQuote])).rows[0].registered_document_id,null);
+  console.log('PASS real QT issue API: complete 资料 allowed, persistent QT number, customer advances once, trigger audit, duplicate request and unauthorized access, shipped/installed/unverified states blocked');
   assert.equal((await fetch(origin+'/api/settings/workflow',{headers:salesHeaders})).status,403);
   const config=await runtimeConfig(pool), changed={...config,sla_assign_minutes:30,sla_first_reply_minutes:31};
   assert.equal((await fetch(origin+'/api/settings/workflow',{method:'PUT',headers:salesHeaders,body:JSON.stringify(changed)})).status,403);
@@ -120,7 +147,8 @@ try {
   await pool.query("UPDATE crm_runtime_config SET value='45' WHERE key='sla_assign_minutes'");
   const archive=await backup(pool);
   await restore(restored,archive);
-  assert.equal((await restored.query('SELECT count(*)::int AS n FROM crm_document_registry')).rows[0].n,23);
+  assert.equal((await restored.query('SELECT count(*)::int AS n FROM crm_document_registry')).rows[0].n,24);
+  assert.equal((await restored.query('SELECT count(*)::int AS n FROM crm_customer_status_events')).rows[0].n,1);
   assert.equal((await runtimeConfig(restored)).sla_assign_minutes,45);
   assert.equal((await restored.query('SELECT crm_customer_code FROM customers WHERE id=$1',[one])).rows[0].crm_customer_code,repeats[0]);
   assert.equal((await restored.query('SELECT count(*)::int AS n FROM crm_customer_code_ledger')).rows[0].n,45);

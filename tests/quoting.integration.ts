@@ -11,6 +11,7 @@ import {database,migrate} from "../server/db.ts";
 import {createApp} from "../server/app.ts";
 import {hashPassword} from "../server/domain.ts";
 import {backup,restore} from "../server/backup.ts";
+import {allocatePartner,allocateCustomerCode} from '../server/customer-code-store.ts';
 import {fixtures} from "./quoting.fixtures.ts";
 import {supplyScenario} from "./supply.scenario.ts";
 import {catalogScenario} from "./catalog.scenario.ts";
@@ -59,6 +60,8 @@ await postgres.initialise();await postgres.start();started=true;await postgres.c
  for(const[name,role]of [["a","sales"],["b","sales"],["logistics","logistics"],["technical","technical"]])await ok(admin,"/team","POST",{name,email:`${name}@test.invalid`,role,password});
  const a=await login("a@test.invalid"),b=await login("b@test.invalid"),log=await login("logistics@test.invalid"),tech=await login("technical@test.invalid");
  const ca=await ok(admin,"/customers","POST",{company:"TEST Alpha",contact:"Test A",country:"UAE",grade:"A",ownerId:a.user.id}),cb=await ok(admin,"/customers","POST",{company:"TEST Beta Private",contact:"Test B",country:"UK",grade:"B",ownerId:b.user.id});
+ const partner=await allocatePartner(pool,{userId:a.user.id,joinYear:2026,name:'ISOLATED TEST first developer',market:'TEST'});
+ for(const customer of [ca,cb]) await allocateCustomerCode(pool,{customerId:customer.id,partnerId:partner.id,firstContactDate:'2026-09-22',source:'new'});
  const fixture=fixtures();await ok(admin,"/quoting/settings","PUT",{data:fixture.settings,version:1});
  fixture.product.id=(await ok(admin,"/quoting/products","POST",fixture.product)).id;fixture.freight.id=(await ok(admin,"/quoting/freight","POST",fixture.freight)).id;fixture.input.lines[0].productId=fixture.product.id;fixture.input.freightId=fixture.freight.id;
  const catalog=await ok(a,"/quoting/products");assert.ok(!JSON.stringify(catalog).includes('"cost"'));assert.ok(!JSON.stringify(catalog).includes('"internal"'));
