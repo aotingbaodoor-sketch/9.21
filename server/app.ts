@@ -39,6 +39,7 @@ import { registerQuoting } from "./quoting/routes.ts";
 import { registerSupplyRoutes } from "./supply/routes.ts";
 import { registerLinkedRoutes } from "./whatsapp/linked-routes.ts";
 import { runtimeConfig } from './document-registry.ts';
+import {registerCustomerIdentity} from './customer-identity-routes.ts';
 
 declare global {
   namespace Express {
@@ -274,6 +275,7 @@ export function createApp(pool: pg.Pool, options: Options) {
   registerLinkedRoutes(app, pool, mutate);
   registerQuoting(app, pool, mutate);
   registerSupplyRoutes(app, pool, mutate);
+  registerCustomerIdentity(app,pool,mutate);
   app.get("/api/customers", async (req, res) =>
     res.json(await repo.listCustomers(pool, req.actor, req.query)),
   );

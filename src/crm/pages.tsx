@@ -23,6 +23,7 @@ import {
   Status,
 } from "./ui.tsx";
 import { UserForm } from "./forms.tsx";
+import {CustomerIdentity} from './CustomerIdentity.tsx';
 import { WorkflowSettings } from './WorkflowSettings.tsx';
 import {
   WhatsAppAnalytics,
@@ -379,6 +380,7 @@ export function CustomerDetail(actions: CustomerActions) {
           )}
         </div>
       </Panel>
+      <CustomerIdentity customerId={c.id}/>
       <div className="tabs">
         <button
           className={params.get("tab") !== "whatsapp" ? "active" : ""}
