@@ -2,7 +2,7 @@ import pg from "pg";
 import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import {migrationChecksum,matchesMigrationChecksum} from './migration-checksum.ts';
 pg.types.setTypeParser(1082, (value) => value); // DATE 是业务日，不做本机时区转换。
 export function database(url: string) {
   return new pg.Pool({
@@ -41,13 +41,13 @@ export async function migrate(pool: pg.Pool) {
       .filter((n) => n.endsWith(".sql"))
       .sort()) {
       const sql = await readFile(`${dir}/${name}`, "utf8"),
-        checksum = createHash("sha256").update(sql).digest("hex");
+        checksum = migrationChecksum(sql);
       const exists = await db.query(
         "SELECT checksum FROM schema_migrations WHERE name=$1",
         [name],
       );
       if (exists.rowCount) {
-        if (exists.rows[0].checksum !== checksum)
+        if (!matchesMigrationChecksum(sql,exists.rows[0].checksum))
           throw new Error(`已应用迁移被修改：${name}`);
         continue;
       }

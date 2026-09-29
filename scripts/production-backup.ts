@@ -4,6 +4,7 @@ import {readFileSync,mkdirSync,writeFileSync} from 'node:fs';
 import {createCipheriv,createHash,randomBytes} from 'node:crypto';
 import path from 'node:path';
 import pg from 'pg';
+import {matchesMigrationChecksum} from '../server/migration-checksum.ts';
 const [cli,destination]=process.argv.slice(2);
 if(!cli||!destination)throw new Error('CLI path and backup destination required');
 let pool:pg.Pool|undefined;
@@ -17,7 +18,7 @@ try {
  try {
   await db.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
   const migrations=(await db.query('SELECT name,checksum FROM schema_migrations ORDER BY name')).rows;
-  const definitions=migrations.map(m=>{const sql=readFileSync(path.join('server/migrations',m.name),'utf8');if(createHash('sha256').update(sql).digest('hex')!==m.checksum)throw new Error('MIGRATION_CHECKSUM');return {name:m.name,sql};});
+  const definitions=migrations.map(m=>{const sql=readFileSync(path.join('server/migrations',m.name),'utf8');if(!matchesMigrationChecksum(sql,m.checksum))throw new Error('MIGRATION_CHECKSUM');return {name:m.name,sql};});
   const tables:Record<string,unknown[]>={};
   // PostgreSQL JSON preserves full timestamp precision and DATE values, avoiding
   // the JavaScript Date millisecond conversion during backup.
