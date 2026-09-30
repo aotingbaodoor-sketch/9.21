@@ -10,7 +10,7 @@ import {
   useNavigate,
 } from "react-router-dom";
 import type { Customer, Settings, User } from "../../shared/contracts.ts";
-import { api, setCsrf, useMutation } from "./api.ts";
+import { api, setCsrf, useMutation, useResource } from "./api.ts";
 import { SessionContext } from "./context.tsx";
 import {
   CustomerForm,
@@ -32,6 +32,8 @@ import {
 import ImportPage from "./ImportPage.tsx";
 import { Quotations, QuoteProject } from "./Quotations.tsx";
 import { QuoteAdmin } from "./QuoteAdmin.tsx";
+import './daily-prices.css';
+const DailyPrices=lazy(()=>import('./DailyPrices.tsx'));
 import { QuoteTasks } from "./QuoteTasks.tsx";
 import { SupplyChain, FactoryManager } from "./SupplyChain.tsx";
 const FactoryOrders = lazy(() => import("./FactoryPortal.tsx").then(module => ({default: module.FactoryOrders})));
@@ -44,6 +46,7 @@ import {
 } from "./WhatsApp.tsx";
 import { ErrorBox, Field, Loading } from "./ui.tsx";
 type Auth = { user: User; settings: Settings; csrf: string };
+function PricingAlertNotice(){const r=useResource<{count:number}>('/pricing/alerts/count',0,60000);return r.data?.count?<Link to="/daily-prices" role="status">价格同步异常（{r.data.count}）</Link>:null;}
 export default function CRM() {
   return (
     <BrowserRouter>
@@ -131,6 +134,7 @@ function Root() {
     specialist = ["technical", "logistics", "factory", "coordinator"].includes(user.role),
     menus = [
       ["/dashboard", "工作台"],
+      ...(['admin','sales','logistics'].includes(user.role)?[['/daily-prices','每日价格与运费']]:[]),
       ["/customers", "客户管理"],
       ["/follow-ups", "今日跟进"],
       ["/records", "跟进记录"],
@@ -152,7 +156,7 @@ function Root() {
       ...(user.role === "factory" ? [["/factory/products", "供货产品"], ["/factory/orders", "工厂订单"]] : []),
       ...(["coordinator","technical","logistics"].includes(user.role) ? [["/supply/assigned", "我的跟单任务"]] : []),
       ...(user.role === "admin" ? [["/supply/factories", "合作工厂管理"], ["/factory/products", "工厂产品审核"]] : []),
-    ].filter(([path]) => user.role === "factory" ? path.startsWith("/factory/") : user.role === "coordinator" ? path.startsWith('/supply/') : !specialist || path.startsWith("/quotations/") || path.startsWith("/supply")),
+    ].filter(([path]) => user.role === "factory" ? path.startsWith("/factory/") : user.role === "coordinator" ? path.startsWith('/supply/') : !specialist || path.startsWith("/quotations/") || path.startsWith("/supply") || (user.role==='logistics'&&path==='/daily-prices')),
     title =
       (menus.find(([path]) => location.pathname === path) ||
         menus.find(([path]) => location.pathname.startsWith(path)))?.[1] ||
@@ -216,6 +220,7 @@ function Root() {
                 提醒
               </Link>
               <WhatsAppBadge /></>}
+              {user.role==='admin'&&<PricingAlertNotice/>}
               {user.avatar ? (
                 <img className="avatar" src={user.avatar} alt={user.name} />
               ) : (
@@ -238,6 +243,7 @@ function Root() {
           </header>
           <ErrorBox message={logout.error} />
           <Suspense fallback={<Loading />}><Routes>
+            <Route path="/daily-prices" element={<DailyPrices/>}/>
             <Route path="/quotations/products" element={<QuoteAdmin mode="products" />} />
             <Route path="/quotations/freight" element={<QuoteAdmin mode="freight" />} />
             <Route path="/quotations/settings" element={<QuoteAdmin mode="settings" />} />

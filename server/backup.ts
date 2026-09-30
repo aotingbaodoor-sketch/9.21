@@ -51,6 +51,11 @@ const tables = [
   "quotation_deposits",
   "quotation_documents",
   "quotation_bundles",
+  "pricing_sync_config",
+  "pricing_fx_batches",
+  "pricing_sync_runs",
+  "pricing_alerts",
+  "pricing_imports",
   "factories",
   "factory_users",
   "factory_products",
@@ -121,7 +126,7 @@ export async function restore(
     )
       throw new Error("迁移版本与备份不一致，请使用对应版本代码恢复");
     for (const name of tables.filter(
-      (n) => !["settings","whatsapp_settings","quotation_settings","crm_document_class","crm_runtime_config"].includes(n),
+      (n) => !["settings","whatsapp_settings","quotation_settings","crm_document_class","crm_runtime_config","pricing_sync_config"].includes(n),
     ))
       if ((await db.query(`SELECT 1 FROM ${name} LIMIT 1`)).rowCount)
         throw new Error(
@@ -145,7 +150,7 @@ export async function restore(
           throw new Error("备份字段无效");
         const seedKey = name === 'crm_document_class' ? 'code' : name === 'crm_runtime_config' ? 'key' : 'id';
         const onConflict =
-          ["settings","whatsapp_settings","quotation_settings","crm_document_class","crm_runtime_config"].includes(name)
+          ["settings","whatsapp_settings","quotation_settings","crm_document_class","crm_runtime_config","pricing_sync_config"].includes(name)
             ? ` ON CONFLICT(${seedKey}) DO UPDATE SET ${keys
                 .filter((k) => k !== seedKey)
                 .map((k) => `"${k}"=EXCLUDED."${k}"`)
@@ -156,7 +161,7 @@ export async function restore(
           keys.map((k) =>
             columns.get(k) === "jsonb" || columns.get(k) === "json"
               ? JSON.stringify(row[k])
-              : row[k],
+              : columns.get(k)==='bytea'&&row[k]&&typeof row[k]==='object'&&'type' in (row[k] as object)&&(row[k] as {type:string}).type==='Buffer' ? Buffer.from((row[k] as {data:number[]}).data) : row[k],
           ),
         );
       }

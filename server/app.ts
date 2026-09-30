@@ -40,6 +40,7 @@ import { registerSupplyRoutes } from "./supply/routes.ts";
 import { registerLinkedRoutes } from "./whatsapp/linked-routes.ts";
 import { runtimeConfig } from './document-registry.ts';
 import {registerCustomerIdentity} from './customer-identity-routes.ts';
+import {registerPricing} from './pricing/routes.ts';
 
 declare global {
   namespace Express {
@@ -263,7 +264,7 @@ export function createApp(pool: pg.Pool, options: Options) {
     res.json(value);
   };
   app.use("/api", (req, _res, next) => {
-    if (["logistics", "technical"].includes(req.actor.role) && !req.path.startsWith("/quoting/") && !req.path.startsWith("/supply/") && req.path !== "/profile")
+    if (["logistics", "technical"].includes(req.actor.role) && !req.path.startsWith("/quoting/") && !req.path.startsWith("/supply/") && !(req.actor.role==='logistics'&&req.path.startsWith('/pricing/')) && req.path !== "/profile")
       throw new HttpError(403, "该岗位仅可访问已授权的报价任务");
     if (req.actor.role === "coordinator" && !req.path.startsWith("/supply/") && req.path !== "/profile")
       throw new HttpError(403, "跟单账号仅可访问已分配的供应链订单");
@@ -274,6 +275,7 @@ export function createApp(pool: pg.Pool, options: Options) {
   registerWhatsAppRoutes(app, whatsapp, mutate);
   registerLinkedRoutes(app, pool, mutate);
   registerQuoting(app, pool, mutate);
+  registerPricing(app,pool,mutate);
   registerSupplyRoutes(app, pool, mutate);
   registerCustomerIdentity(app,pool,mutate);
   app.get("/api/customers", async (req, res) =>

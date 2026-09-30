@@ -30,6 +30,7 @@ export function calculate(input: QuoteInput, products: Product[], freight: Freig
   const lines = input.lines.flatMap(line => {
     const p = products.find(p => p.id === line.productId);
     if (!p || !p.active) { issue("product", "产品不存在或已停用", "admin", true, line.key); return []; }
+    if(p.provenance&&p.provenance.validFrom>today)issue('product-future',`${p.sku}价格尚未生效`,'admin',true,line.key);
     if (!p.priceValidUntil || p.priceValidUntil < input.validUntil || p.priceValidUntil < today) issue("price-expired", `${p.sku} 产品价格有效期不足`, "admin", true, line.key);
     if (p.priceValidUntil) expiry.push(p.priceValidUntil);
     const factor = line.unit === "mm" ? 1 : line.unit === "cm" ? 10 : 1000;
@@ -87,6 +88,9 @@ export function calculate(input: QuoteInput, products: Product[], freight: Freig
     if (!valid || !freight) { issue("freight", "缺少匹配路线且覆盖有效期及发货日的真实运价，不能按零运费出单", "logistics"); freightCost = null; freightTotal = null; }
     else {
       expiry.push(freight.validUntil);
+      if(input.targetDate<freight.validFrom)issue('freight-date','预计出运日在运价生效之前','logistics');
+      const limits=freight.limits;
+      if(limits&&((limits.minCbm!==null&&cbm<limits.minCbm)||(limits.maxCbm!==null&&cbm>limits.maxCbm)||(limits.minKg!==null&&grossKg<limits.minKg)||(limits.maxKg!==null&&grossKg>limits.maxKg)))issue('freight-condition','货物体积或重量不符合货代报价适用条件','logistics');
       if (required[input.incoterm].some(k => !freight.confirmed.includes(k as typeof freight.confirmed[number]) || !freight.fees.some(f => f.kind === k))) { issue("coverage", `${input.incoterm} 所需费用尚未逐项核实（DDP 必须确认清关与税费）`, "logistics"); freightCost = null; freightTotal = null; }
       else {
         if (freight.fees.some(f => f.basis === "chargeableKg") && !freight.volumetricKgPerCbm) issue("volumetric", "空运/快递计费体积重系数未配置", "logistics");
@@ -98,7 +102,7 @@ export function calculate(input: QuoteInput, products: Product[], freight: Freig
       }
     }
   }
-  const productTotal = round(sum(lines.map(l => l.productTotal))), packingTotal = round(sum(lines.map(l => l.packingTotal))), total = freightTotal === null ? null : round(sum([productTotal, packingTotal, freightTotal]));
+  const productTotal = round(sum(lines.map(l => l.productTotal))), packingTotal = round(sum(lines.map(l => l.packingTotal))), total = freightTotal === null || issues.some(i=>i.hard) ? null : round(sum([productTotal, packingTotal, freightTotal]));
   const sellCny = d(total || 0).mul(quoteFx.cnyPerUnit), marginPct = total === null ? null : sellCny.gt(0) ? round(sellCny.minus(totalCost).div(sellCny).mul(100)) : -100;
   if (marginPct !== null && marginPct < Math.max(settings.minMarginPct, permission.minMarginPct)) issue("margin", "整单低于最低毛利要求", "admin", false);
   return { lines, issues, currency: input.currency, productTotal, packingTotal, freightTotal, total, packages, cbm, netKg, grossKg, containers, validThrough: expiry.sort()[0], private: { costCny: round(totalCost), marginPct, freightCostCny: freightCost === null ? null : round(freightCost), freight, settings, fx: quoteFx, policy: permission } };

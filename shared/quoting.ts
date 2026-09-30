@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { dateSchema } from "./contracts.ts";
+import {provenanceSchema,freightLimitsSchema,type PriceBasis} from './pricing.ts';
 
 const text = z.string().trim().max(2000).default("");
 const money = z.number().finite().min(0).max(1e9);
@@ -17,6 +18,7 @@ export const packingSchema = z.object({
   fragile: z.boolean().default(true), fumigation: z.boolean().default(false), stackable: z.boolean().default(false), maxPieceKg: price, maxLengthMm: price,
 });
 export const productSchema = z.object({
+  provenance:provenanceSchema.optional(),
   sku: z.string().trim().min(1).max(80), nameZh: z.string().trim().min(1).max(200), nameEn: z.string().trim().min(1).max(200), category: z.enum(categories), series: text,
   introduction: text, active: z.boolean().default(true), leadDays: z.number().int().min(0).max(1000).default(0),
   imageIds: z.array(z.uuid()).max(12).default([]),
@@ -44,6 +46,7 @@ export const quotationSettingsSchema = z.object({
   containers: z.array(z.object({ name: z.string().min(1).max(40), cbm: z.number().positive(), kg: z.number().positive(), lengthMm: z.number().positive(), widthMm: z.number().positive(), heightMm: z.number().positive() })).max(20).default([]),
 });
 export const freightSchema = z.object({
+  provenance:provenanceSchema.optional(), limits:freightLimitsSchema.optional(),
   name: z.string().trim().min(1).max(150), active: z.boolean().default(true), country: z.string().min(1).max(100), city: text, originPort: text, destinationPort: text,
   mode: z.enum(["LCL", "FCL", "air", "courier", "rail", "truck", "other"]).default("LCL"), currency: z.string().regex(/^[A-Z]{3}$/),
   validFrom: dateSchema, validUntil: dateSchema, forwarder: text, transitDays: text, inclusions: text, exclusions: text,
@@ -75,6 +78,6 @@ export type Freight = z.infer<typeof freightSchema> & { id: string; version: num
 export type Issue = { code: string; message: string; discipline: "admin" | "technical" | "logistics"; hard: boolean; line?: string };
 export type Packed = { packages: number; cbm: number; netKg: number; grossKg: number; widthMm: number; heightMm: number; depthMm: number; type: string; fragile: boolean; fumigation: boolean; stackable: boolean };
 export type CalculatedLine = { key: string; sku: string; nameZh: string; nameEn: string; widthMm: number; heightMm: number; area: number; billedArea: number; quantity: number; unitPrice: number; productTotal: number; packingTotal: number; packed: Packed; svg: string; specs: Record<string, string>; options: string[]; location: string; special: string; private: { cost: number; minimum: number; marginPct: number; product: Product } };
-export type Calculation = { lines: CalculatedLine[]; issues: Issue[]; currency: string; productTotal: number; packingTotal: number; freightTotal: number | null; total: number | null; packages: number; cbm: number; netKg: number; grossKg: number; containers: string[]; validThrough: string; private: { costCny: number; marginPct: number | null; freightCostCny: number | null; freight: Freight | null; settings: QuotationSettings; fx: unknown; policy: QuotePolicy } };
+export type Calculation = { priceBasis?:PriceBasis; lines: CalculatedLine[]; issues: Issue[]; currency: string; productTotal: number; packingTotal: number; freightTotal: number | null; total: number | null; packages: number; cbm: number; netKg: number; grossKg: number; containers: string[]; validThrough: string; private: { costCny: number; marginPct: number | null; freightCostCny: number | null; freight: Freight | null; settings: QuotationSettings; fx: unknown; policy: QuotePolicy } };
 export type PublicCalculation = Omit<Calculation, "private" | "lines"> & { lines: Omit<CalculatedLine, "private">[]; costs?: { costCny: number; marginPct: number | null }; freightCosts?: { freightCostCny: number | null }; lineCosts?: { cost: number; minimum: number; marginPct: number }[] };
 export const specLabels: Record<string, string> = { profile: "型材 / Profile", thickness: "型材厚度 / Profile thickness", finish: "表面工艺 / Finish", color: "颜色 / Color", glass: "玻璃 / Glass", glassThickness: "玻璃厚度 / Glass thickness", cavity: "中空层 / Cavity", hardwareBrand: "五金品牌 / Hardware brand", hardwareModel: "五金型号 / Hardware model", lock: "锁具 / Lock", hinge: "合页 / Hinge", screen: "纱网 / Screen", trim: "门套 / Trim", wallThickness: "墙厚 / Wall thickness", moisture: "防潮 / Moisture", termite: "防蚁 / Termite", acoustic: "隔音 / Acoustic", fire: "防火 / Fire" };

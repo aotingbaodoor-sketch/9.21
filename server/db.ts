@@ -5,12 +5,16 @@ import path from "node:path";
 import {migrationChecksum,matchesMigrationChecksum} from './migration-checksum.ts';
 pg.types.setTypeParser(1082, (value) => value); // DATE 是业务日，不做本机时区转换。
 export function database(url: string) {
-  return new pg.Pool({
+  const pool = new pg.Pool({
     connectionString: url,
     max: 10,
     connectionTimeoutMillis: 10000,
     statement_timeout: 15000,
   });
+  // pg emits idle-connection errors with a Client (and connection parameters).
+  // Do not let Node dump credentials through an unhandled error event.
+  pool.on('error',()=>console.error('数据库空闲连接中断，将重新连接；未输出连接参数'));
+  return pool;
 }
 export type Db = pg.Pool | pg.PoolClient;
 export async function transaction<T>(

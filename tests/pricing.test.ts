@@ -1,0 +1,13 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {parseEcb,nextRun,addDays} from '../server/pricing/sync.ts';
+import {priceStatus} from '../server/pricing/routes.ts';
+import {readImport} from '../server/pricing/imports.ts';
+import {calculate,policy} from '../server/quoting/engine.ts';
+import {fixtures} from './quoting.fixtures.ts';
+export const fixtureXml=(date='2026-09-29',usd='1.1355')=>`<gesmes:Envelope xmlns="http://www.ecb.int/vocabulary/2002-08-01/eurofxref"><Cube><Cube time='${date}'>${Object.entries({USD:usd,JPY:'178.41',CNY:'7.6117',GBP:'.85718',AUD:'1.6211',CAD:'1.6101',SGD:'1.5',HKD:'8.9091',CZK:'24.411',DKK:'7.4754',HUF:'366.38',PLN:'4.3653',RON:'5.2786',SEK:'11.321',CHF:'.9461',ISK:'136.80',NOK:'10.8735',TRY:'55.6398',BRL:'5.9177',INR:'108.9910'}).map(([c,r])=>`<Cube currency='${c}' rate='${r}'/>`).join('')}</Cube></Cube></gesmes:Envelope>`;
+test('ECB原始1EUR交叉转换，JPY按1单位而非100，保留原始日期与精度',()=>{const r=parseEcb(fixtureXml(),new Date('2026-09-30T00:00:00Z'));assert.equal(r.cnyRates.CNY,1);assert.equal(r.cnyRates.EUR,7.6117);assert.equal(r.cnyRates.USD,Number((7.6117/1.1355).toFixed(10)));assert.equal(r.cnyRates.JPY,Number((7.6117/178.41).toFixed(10)));assert.equal(r.date,'2026-09-29');assert.equal(r.rates.JPY,'178.41');});
+test('来源缺失、未来日期、负数、重复币种及DOCTYPE均拒绝，不编造汇率',()=>{for(const xml of [fixtureXml('2999-01-01'),fixtureXml().replace("currency='CNY'","currency='USD'"),fixtureXml().replace("rate='7.6117'","rate='-1'"),'<!DOCTYPE a>'+fixtureXml(),'<xml/>'])assert.throws(()=>parseEcb(xml));});
+test('北京07:30/23:30跨日调度与过期边界',()=>{assert.equal(nextRun(['07:30','23:30'],new Date('2026-09-29T23:29:00Z')).toISOString(),'2026-09-29T23:30:00.000Z');assert.equal(nextRun(['07:30','23:30'],new Date('2026-09-29T23:30:00Z')).toISOString(),'2026-09-30T15:30:00.000Z');assert.equal(addDays('2026-09-29',4),'2026-10-03');assert.equal(priceStatus('2026-09-01','2026-09-29',true,'2026-09-30'),'已过期');assert.equal(priceStatus('2026-10-01','2026-10-03',true,'2026-09-30'),'待确认');});
+test('CSV导入中文与引号，空费用保持空，重复表头拒绝',async()=>{const rows=await readImport(Buffer.from('名称,金额,备注\r\n真实来源,,"含港费,不含税"'),'list.csv');assert.equal(rows[0].金额,null);assert.equal(rows[0].备注,'含港费,不含税');await assert.rejects(readImport(Buffer.from('名称,名称\nx,y'),'x.csv'));});
+test('必需产品/汇率/运价缺失不会产生误导性完整总价',()=>{const f=fixtures();f.settings.fx={};let r=calculate(f.input,[f.product],f.freight,f.settings,policy(f.settings,{id:'test',role:'sales'}),'2026-09-30','test');assert.equal(r.total,null);assert.ok(r.issues.some(i=>i.code==='fx'));r=calculate(f.input,[],f.freight,f.settings,policy(f.settings,{id:'test',role:'sales'}),'2026-09-30','test');assert.equal(r.total,null);});

@@ -1,6 +1,6 @@
 // Decrypt only in memory; restore into a NEW local isolated database, never production.
 import {execFileSync} from 'node:child_process';
-import {readFileSync,mkdtempSync} from 'node:fs';
+import {readFileSync,mkdtempSync,readdirSync} from 'node:fs';
 import {createDecipheriv,randomBytes,createHash} from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -36,11 +36,11 @@ try {
   }
   await db.query('COMMIT');
   for(const [table,rows] of Object.entries(snapshot.tables) as [string,Record<string,unknown>[]][]){const actual=(await db.query(`SELECT row_to_json(t) AS row FROM ${quote(table)} t`)).rows.map(r=>r.row);if(digest(actual)!==digest(rows)){const fields=new Set<string>();for(const r of rows){const a=actual.find(x=>x.id===r.id);if(a)for(const k of Object.keys(r))if(JSON.stringify(canonical(a[k]))!==JSON.stringify(canonical(r[k])))fields.add(k);}console.log('Mismatch field names only:',table,[...fields]);}assert.equal(digest(actual),digest(rows),`Restore mismatch: ${table}`);}
-  console.log('PASS encrypted snapshot restored: all 57 table contents match');
+  console.log('PASS encrypted snapshot restored: all previous table contents match');
  } catch(e){await db.query('ROLLBACK');throw e;} finally{db.release();}
  await migrate(pool);
  for(const [table,rows] of Object.entries(snapshot.tables) as [string,unknown[]][]){if(table!=='schema_migrations')assert.equal(Number((await pool.query(`SELECT count(*) n FROM ${quote(table)}`)).rows[0].n),rows.length,table);}
- assert.equal((await pool.query('SELECT count(*)::int n FROM schema_migrations')).rows[0].n,16);
- console.log('PASS migrations 011–016 on production copy; all previous table row counts preserved; production untouched');
+ assert.equal((await pool.query('SELECT count(*)::int n FROM schema_migrations')).rows[0].n,readdirSync('server/migrations').filter(f=>f.endsWith('.sql')).length);
+ console.log('PASS current migrations on production copy; all previous table row counts preserved; production untouched');
 }catch(e){const match=(e as Error).message.match(/Restore mismatch: [a-z_]+/);console.error('Rehearsal failed:',match?.[0]||(e as {code?:string}).code||'CHECK_FAILED');process.exitCode=1;}
 finally{await pool.end();if(started)await local.stop();}
