@@ -2,7 +2,6 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import {
   BrowserRouter,
   Link,
-  NavLink,
   Navigate,
   Route,
   Routes,
@@ -45,6 +44,8 @@ import {
   WhatsAppIntegration,
 } from "./WhatsApp.tsx";
 import { ErrorBox, Field, Loading } from "./ui.tsx";
+import { SidebarNav } from './SidebarNav.tsx';
+import { activeMenu, visibleMenu } from './navigation.ts';
 type Auth = { user: User; settings: Settings; csrf: string };
 function PricingAlertNotice(){const r=useResource<{count:number}>('/pricing/alerts/count',0,60000);return r.data?.count?<Link to="/daily-prices" role="status">价格同步异常（{r.data.count}）</Link>:null;}
 export default function CRM() {
@@ -132,58 +133,21 @@ function Root() {
     );
   const { user, settings } = session,
     specialist = ["technical", "logistics", "factory", "coordinator"].includes(user.role),
-    menus = [
-      ["/dashboard", "工作台"],
-      ...(['admin','sales','logistics'].includes(user.role)?[['/daily-prices','每日价格与运费']]:[]),
-      ["/customers", "客户管理"],
-      ["/follow-ups", "今日跟进"],
-      ["/records", "跟进记录"],
-      ["/notifications", "提醒中心"],
-      ["/whatsapp", "WhatsApp 收件箱"],
-      ["/whatsapp/account", "我的 WhatsApp"],
-      ...(["admin", "sales"].includes(user.role) ? [["/quotations", "报价管理"]] : []),
-      ...(user.role === "admin"
-        ? [["/whatsapp/integration", "WhatsApp 集成"]]
-        : []),
-      ...(user.role === "admin" ? [["/team", "员工管理"]] : []),
-      ["/analytics", "数据统计"],
-      ["/settings", "系统设置"],
-      ...(user.role === "admin" ? [["/import", "旧数据导入"]] : []),
-      ...(user.role === "admin" ? [["/quotations/products", "产品与价格"], ["/quotations/settings", "报价规则与汇率"]] : []),
-      ...(["admin", "logistics"].includes(user.role) ? [["/quotations/freight", "海外运价库"]] : []),
-      ...(user.role !== "sales" ? [["/quotations/tasks", "报价审批 / 技术任务"]] : []),
-      ...(["admin", "sales", "technical", "logistics"].includes(user.role) ? [["/supply", "订单供应链"]] : []),
-      ...(user.role === "factory" ? [["/factory/products", "供货产品"], ["/factory/orders", "工厂订单"]] : []),
-      ...(["coordinator","technical","logistics"].includes(user.role) ? [["/supply/assigned", "我的跟单任务"]] : []),
-      ...(user.role === "admin" ? [["/supply/factories", "合作工厂管理"], ["/factory/products", "工厂产品审核"]] : []),
-    ].filter(([path]) => user.role === "factory" ? path.startsWith("/factory/") : user.role === "coordinator" ? path.startsWith('/supply/') : !specialist || path.startsWith("/quotations/") || path.startsWith("/supply") || (user.role==='logistics'&&path==='/daily-prices')),
-    title =
-      (menus.find(([path]) => location.pathname === path) ||
-        menus.find(([path]) => location.pathname.startsWith(path)))?.[1] ||
-      settings.name;
+    title = activeMenu(visibleMenu(user.role), location.pathname, location.search)?.label || settings.name;
   return (
     <SessionContext.Provider
       value={{ user, settings, revision, refresh, notify, reloadSession }}
     >
       <div className="app">
-        <aside className={`sidebar ${mobile ? "open" : ""}`}>
+        <aside id="crm-sidebar" className={`sidebar ${mobile ? "open" : ""}`} onKeyDown={e => { if (e.key === 'Escape') setMobile(false); }}>
+          <button className="sidebar-close" aria-label="关闭侧边菜单" onClick={() => setMobile(false)}>关闭</button>
           <div className="brand">
             <b>{settings.name}</b>
             <small>AUTINBERG CRM</small>
           </div>
-          {menus.length > 10 && <small className="sidebar-scroll-hint">菜单可上下滚动 ↓</small>}
-          <nav aria-label="主导航">
-            {menus.map(([path, label]) => (
-              <NavLink
-                to={path}
-                end={path === "/whatsapp"}
-                key={path}
-                onClick={() => setMobile(false)}
-              >
-                {label}
-              </NavLink>
-            ))}
-          </nav>
+          <small className="sidebar-scroll-hint">点击部门展开 · 菜单可上下滚动 ↓</small>
+          <SidebarNav key={`${user.role}:${location.pathname}:${location.search}`} role={user.role}
+            pathname={location.pathname} search={location.search} onNavigate={() => setMobile(false)} />
           <footer>
             {settings.company}
             <small>专注客户，持续跟进</small>
@@ -209,7 +173,7 @@ function Root() {
               </p>
             </div>
             <div className="actions">
-              <button className="mobile-menu" onClick={() => setMobile(true)}>
+              <button className="mobile-menu" aria-expanded={mobile} aria-controls="crm-sidebar" onClick={() => setMobile(true)}>
                 菜单
               </button>
               {!specialist && <><Link to="/customers">搜索客户</Link>

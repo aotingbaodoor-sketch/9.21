@@ -1,0 +1,27 @@
+.sidebar { width: 288px; padding: 22px 0 16px; }
+.main { margin-left: 288px; }
+.sidebar .brand { padding-bottom: 16px; }
+.menu-controls { display: flex; gap: 8px; padding: 0 18px 12px; flex-shrink: 0; }
+.menu-controls button { padding: 3px 9px; font-size: 12px; color: #d8c59f; background: transparent; border-color: #555047; }
+.sidebar .menu-toggle { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; width: 100%; text-align: left; padding: 11px 15px; border: 0; border-radius: 0; background: transparent; color: #dce0e3; white-space: normal; line-height: 1.5; }
+.sidebar .menu-toggle > span:first-child { flex: 1; }
+.sidebar .menu-toggle:hover:not(:disabled) { background: #2b2b29; }
+.sidebar .menu-toggle:disabled { cursor: default; opacity: 1; color: #85898d; }
+.sidebar .menu-toggle small { width: 100%; font-size: 11px; color: #989b9f; }
+.menu-indicator { color: #c6a667; }
+.menu-level-0 { border-top: 1px solid #303131; }
+.menu-children { margin-left: 12px; border-left: 1px solid #49453c; }
+.sidebar nav .menu-link { padding: 10px 12px; font-size: 13px; overflow-wrap: anywhere; }
+.sidebar nav > .menu-link { padding: 13px 18px; font-size: 15px; font-weight: 600; }
+.sidebar .menu-link:focus-visible, .sidebar .menu-toggle:focus-visible, .menu-controls button:focus-visible { outline: 2px solid #d9bd86; outline-offset: -3px; }
+.menu-owner { display: block; padding: 5px 12px; color: #b7ac97; font-size: 11px; }
+.sidebar footer { margin-top: 10px; padding-top: 10px; }
+.sidebar-close { display: none; }
+@media (max-width: 700px) {
+  .main { margin-left: 0; }
+  .sidebar { width: min(320px, 88vw); padding-top: 16px; }
+  .sidebar.open { z-index: 10; }
+  .sidebar-close { display: block; position: absolute; right: 12px; top: 12px; padding: 4px 8px; color: #eee; background: #292a2b; }
+  .sidebar .brand b { font-size: 20px; }
+  .sidebar .menu-toggle, .sidebar nav .menu-link { min-height: 44px; }
+}
