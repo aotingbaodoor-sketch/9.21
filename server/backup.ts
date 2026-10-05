@@ -24,6 +24,7 @@ const tables = [
   "import_batches",
   "imported_rows",
   "idempotency_keys",
+  "whatsapp_contact_policy",
   "whatsapp_settings",
   "whatsapp_accounts",
   "whatsapp_linked_sessions",
@@ -40,6 +41,10 @@ const tables = [
   "whatsapp_media",
   "whatsapp_alerts",
   "whatsapp_templates",
+  "whatsapp_permission_events",
+  "whatsapp_prospect_reviews",
+  "whatsapp_sales_tasks",
+  "whatsapp_reception_state",
   "quotation_settings",
   "quotation_products",
   "quotation_projects",
@@ -64,8 +69,16 @@ const tables = [
   "sales_order_items",
   "order_evidence",
   "order_milestone_events",
+  "crm_fulfillment_stage",
+  "crm_logistics_doc_type",
+  "crm_work_orders",
+  "crm_order_progress",
   "purchase_orders",
   "purchase_order_items",
+  "crm_manufacturing_orders",
+  "crm_fulfillment_events",
+  "crm_logistics_documents",
+  "crm_fulfillment_notice_drafts",
   "production_updates",
   "production_issues",
   "quality_inspections",
@@ -126,7 +139,7 @@ export async function restore(
     )
       throw new Error("迁移版本与备份不一致，请使用对应版本代码恢复");
     for (const name of tables.filter(
-      (n) => !["settings","whatsapp_settings","quotation_settings","crm_document_class","crm_runtime_config","pricing_sync_config"].includes(n),
+      (n) => !["settings","whatsapp_settings","quotation_settings","crm_document_class","crm_runtime_config","pricing_sync_config","crm_fulfillment_stage","crm_logistics_doc_type"].includes(n),
     ))
       if ((await db.query(`SELECT 1 FROM ${name} LIMIT 1`)).rowCount)
         throw new Error(
@@ -148,9 +161,9 @@ export async function restore(
         const keys = Object.keys(row);
         if (!keys.length || keys.some((k) => !columns.has(k)))
           throw new Error("备份字段无效");
-        const seedKey = name === 'crm_document_class' ? 'code' : name === 'crm_runtime_config' ? 'key' : 'id';
+        const seedKey = ['crm_document_class','crm_fulfillment_stage','crm_logistics_doc_type'].includes(name) ? 'code' : name === 'crm_runtime_config' ? 'key' : 'id';
         const onConflict =
-          ["settings","whatsapp_settings","quotation_settings","crm_document_class","crm_runtime_config","pricing_sync_config"].includes(name)
+          ["settings","whatsapp_settings","quotation_settings","crm_document_class","crm_runtime_config","pricing_sync_config","crm_fulfillment_stage","crm_logistics_doc_type"].includes(name)
             ? ` ON CONFLICT(${seedKey}) DO UPDATE SET ${keys
                 .filter((k) => k !== seedKey)
                 .map((k) => `"${k}"=EXCLUDED."${k}"`)

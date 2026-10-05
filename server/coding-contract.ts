@@ -3,7 +3,7 @@ export class CodingError extends Error {}
 export const BATCHES = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 export type DocumentClass = { code: string; family: 'A' | 'B'; enabled: boolean };
 export const CONTRACT_CLASSES: readonly DocumentClass[] = [
-  ...'QT PI SC SO CI PL RC BP'.split(' ').map(code => ({ code, family: 'A' as const, enabled: true })),
+  ...'TC QT PI SC SO CI PL RC BP'.split(' ').map(code => ({ code, family: 'A' as const, enabled: true })),
   ...'LD WO AS QC SM CK PO SA GR AR AP EX FA DA MO'.split(' ').map(code => ({ code, family: 'B' as const, enabled: true })),
 ];
 const entities: Record<string, { width: number; active: boolean }> = Object.fromEntries([

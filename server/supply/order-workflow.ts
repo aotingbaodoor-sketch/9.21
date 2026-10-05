@@ -226,7 +226,7 @@ export async function recordOrderEvidence(
   const current = await orderWorkflow(db, orderId);
   if (
     ["measurement", "dimensions"].includes(input.kind) &&
-    current.evidence.productionInstructionIssued
+    (current.evidence.productionInstructionIssued || (await db.query('SELECT 1 FROM crm_manufacturing_orders m JOIN crm_work_orders w ON w.id=m.work_order_id WHERE w.sales_order_id=$1 LIMIT 1',[orderId])).rowCount)
   )
     throw new HttpError(
       409,

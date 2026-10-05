@@ -33,6 +33,11 @@ import { Quotations, QuoteProject } from "./Quotations.tsx";
 import { QuoteAdmin } from "./QuoteAdmin.tsx";
 import './daily-prices.css';
 const DailyPrices=lazy(()=>import('./DailyPrices.tsx'));
+const OrderChain=lazy(()=>import('./OrderChain.tsx'));
+const ManufacturingView=lazy(()=>import('./OrderChain.tsx').then(m=>({default:m.ManufacturingView})));
+const DocumentClasses=lazy(()=>import('./Numbering.tsx').then(m=>({default:m.DocumentClasses})));
+const NumberingLedger=lazy(()=>import('./Numbering.tsx').then(m=>({default:m.NumberingLedger})));
+const CustomerDocumentChain=lazy(()=>import('./Numbering.tsx').then(m=>({default:m.CustomerDocumentChain})));
 import { QuoteTasks } from "./QuoteTasks.tsx";
 import { SupplyChain, FactoryManager } from "./SupplyChain.tsx";
 const FactoryOrders = lazy(() => import("./FactoryPortal.tsx").then(module => ({default: module.FactoryOrders})));
@@ -207,6 +212,12 @@ function Root() {
           </header>
           <ErrorBox message={logout.error} />
           <Suspense fallback={<Loading />}><Routes>
+            <Route path="/supply/chain" element={<OrderChain/>}/>
+            <Route path="/supply/chain/:id" element={<OrderChain/>}/>
+            <Route path="/supply/manufacturing/:id" element={<ManufacturingView/>}/>
+            <Route path="/settings/document-classes" element={<DocumentClasses/>}/>
+            <Route path="/master-data/numbering" element={<NumberingLedger/>}/>
+            <Route path="/customers/:id/chain" element={<CustomerDocumentChain/>}/>
             <Route path="/daily-prices" element={<DailyPrices/>}/>
             <Route path="/quotations/products" element={<QuoteAdmin mode="products" />} />
             <Route path="/quotations/freight" element={<QuoteAdmin mode="freight" />} />

@@ -12,6 +12,7 @@ import {
 import { productSchema } from "../../shared/quoting.ts";
 import { hashPassword, HttpError, requireAdmin,businessDay } from "../domain.ts";
 import {registerDocumentInTransaction} from '../document-registry.ts';
+import {requireIssuedWorkOrder,attachPurchaseToWorkOrder,requireNumberedManufacturing,recordNumberedProductionStart} from './chain.ts';
 import * as repo from "../repository.ts";
 import {
   purchaseOrder,
@@ -93,12 +94,19 @@ export function registerSupplyRoutes(
   app.get('/api/supply/orders/:id/workflow', async (req,res) => {
     const order=await salesOrder(pool,req.actor,uid(req.params.id));
     const result=await orderWorkflow(pool,order.id);
-    res.json({state:result.state,projectId:result.quote.project_id,evidence:result.evidence,events:result.events,
+    const chain=(await pool.query(`SELECT w.id AS work_order_id,w.current_stage,
+      EXISTS(SELECT 1 FROM crm_manufacturing_orders m WHERE m.work_order_id=w.id) AS dimensions_locked,
+      (w.current_stage='material_ready' AND EXISTS(SELECT 1 FROM purchase_orders p WHERE p.work_order_id=w.id AND p.status<>'cancelled')
+       AND NOT EXISTS(SELECT 1 FROM purchase_orders p WHERE p.work_order_id=w.id AND p.status<>'cancelled' AND NOT EXISTS(SELECT 1 FROM crm_manufacturing_orders m WHERE m.purchase_order_id=p.id))) AS ready
+      FROM crm_work_orders w WHERE w.sales_order_id=$1`,[order.id])).rows[0]??null;
+    res.json({chain,state:result.state,projectId:result.quote.project_id,evidence:result.evidence,events:result.events,
       records:result.records.map(({data,...record})=>({...record,...(req.actor.role==='admin'?{data}:{})}))});
   });
   app.post('/api/supply/orders/:id/evidence', async (req,res) => mutate(req,res,async db=> {
     const order=await salesOrder(db,req.actor,uid(req.params.id));
+    const workOrder=req.body?.kind==='instruction'?await requireNumberedManufacturing(db,req.actor,order.id):null;
     const result=await recordOrderEvidence(db,req.actor,order.id,req.body);
+    if(workOrder)await recordNumberedProductionStart(db,req.actor,workOrder,result.id);
     await repo.audit(db,req.actor,'登记订单履约证据',order.id,{evidenceId:result.id,state:result.state});
     return result;
   }));
@@ -486,6 +494,7 @@ export function registerSupplyRoutes(
         order.id,
       ]);
       await requireOrderDraft(db, order.id);
+      const workOrder = await requireIssuedWorkOrder(db, order.id);
       const input = z
         .object({
           factoryId: z.uuid(),
@@ -523,7 +532,7 @@ export function registerSupplyRoutes(
       const registered=await registerDocumentInTransaction(db,{classCode:'PO',customerIds:[order.customer_id],date:businessDay((await repo.settings(db)).timezone),businessKind:'purchase_order',businessId:poId,requestKey:z.uuid().parse(req.get('idempotency-key')),actorId:req.actor.id},async()=>{});
       const number = registered.doc_no;
       await db.query(
-        "INSERT INTO purchase_orders(id,sales_order_id,factory_id,order_number,promised_date,created_by) VALUES($1,$2,$3,$4,$5,$6)",
+        "INSERT INTO purchase_orders(id,sales_order_id,factory_id,order_number,promised_date,created_by,work_order_id) VALUES($1,$2,$3,$4,$5,$6,$7)",
         [
           poId,
           order.id,
@@ -531,6 +540,7 @@ export function registerSupplyRoutes(
           number,
           input.promisedDate,
           req.actor.id,
+          workOrder.id,
         ],
       );
       for (const line of lines)
@@ -549,6 +559,7 @@ export function registerSupplyRoutes(
         factoryId: input.factoryId,
         itemCount: lines.length,
       });
+      await attachPurchaseToWorkOrder(db,req.actor,workOrder,poId);
       return { id: poId };
     }),
   );

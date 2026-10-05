@@ -23,7 +23,7 @@ try {
   // PostgreSQL JSON preserves full timestamp precision and DATE values, avoiding
   // the JavaScript Date millisecond conversion during backup.
   for(const {tablename} of (await db.query("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename")).rows)tables[tablename]=(await db.query(`SELECT row_to_json(t) AS row FROM public."${tablename.replaceAll('"','""')}" t`)).rows.map(r=>r.row);
-  payload={format:'autinberg-production-snapshot-v1',createdAt:new Date().toISOString(),definitions,tables,variables:vars,rollbackCommit:'623ec531796c93ea35152293d11a27061f4e7961',rollbackDeployment:'e1f9c98b-9857-4d0c-8ad3-b4d7e5f55384'};
+  payload={format:'autinberg-production-snapshot-v1',createdAt:new Date().toISOString(),definitions,tables,variables:vars,rollbackCommit:vars.APP_VERSION ?? null,rollbackDeployment:process.argv[4] ?? null};
   await db.query('ROLLBACK');
  }finally{db.release();}
  const key=randomBytes(32),iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);

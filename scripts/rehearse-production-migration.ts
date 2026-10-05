@@ -12,7 +12,7 @@ const protectedKey=execFileSync('powershell.exe',['-NoProfile','-NonInteractive'
 const key=Buffer.from(protectedKey,'base64'),decipher=createDecipheriv('aes-256-gcm',key,Buffer.from(archive.iv,'base64'));decipher.setAuthTag(Buffer.from(archive.tag,'base64'));
 const snapshot=JSON.parse(Buffer.concat([decipher.update(Buffer.from(archive.encrypted,'base64')),decipher.final()]).toString());key.fill(0);
 const root=mkdtempSync(path.join(os.tmpdir(),'autinberg-production-rehearsal-')),password=randomBytes(32).toString('hex');
-const local=await localPostgres({databaseDir:path.join(root,'pg'),port:55617,user:'postgres',password,persistent:true,onLog:()=>{},onError:()=>{}});
+const local=await localPostgres({databaseDir:path.join(root,'pg'),port:55617,user:'postgres',password,persistent:true,fastIsolatedInit:true,onLog:()=>{},onError:()=>{}});
 let started=false;const pool=database(`postgresql://postgres:${password}@127.0.0.1:55617/production_rehearsal`);
 pool.on('error',()=>{});
 const quote=(s:string)=>'"'+s.replaceAll('"','""')+'"';
@@ -39,7 +39,18 @@ try {
   console.log('PASS encrypted snapshot restored: all previous table contents match');
  } catch(e){await db.query('ROLLBACK');throw e;} finally{db.release();}
  await migrate(pool);
- for(const [table,rows] of Object.entries(snapshot.tables) as [string,unknown[]][]){if(table!=='schema_migrations')assert.equal(Number((await pool.query(`SELECT count(*) n FROM ${quote(table)}`)).rows[0].n),rows.length,table);}
+ for(const [table,rows] of Object.entries(snapshot.tables) as [string,Record<string,unknown>[]][]){
+  if(table==='schema_migrations')continue;
+  // 020 adds exactly TC and metadata to class configuration; it never replaces historical codes.
+  const added=table==='crm_document_class'&&!rows.some(r=>r.code==='TC')?1:0;
+  assert.equal(Number((await pool.query(`SELECT count(*) n FROM ${quote(table)}`)).rows[0].n),rows.length+added,table);
+  // Compare every original column after migration, not just row counts.
+  if(rows.length){
+   const cols=Object.keys(rows[0]);
+   const actual=(await pool.query(`SELECT row_to_json(t) AS row FROM (SELECT ${cols.map(quote).join(',')} FROM ${quote(table)}${table==='crm_document_class'&&added?" WHERE code<>'TC'":''}) t`)).rows.map(r=>r.row);
+   assert.equal(digest(actual),digest(rows),`Original columns changed: ${table}`);
+  }
+ }
  assert.equal((await pool.query('SELECT count(*)::int n FROM schema_migrations')).rows[0].n,readdirSync('server/migrations').filter(f=>f.endsWith('.sql')).length);
  console.log('PASS current migrations on production copy; all previous table row counts preserved; production untouched');
 }catch(e){const match=(e as Error).message.match(/Restore mismatch: [a-z_]+/);console.error('Rehearsal failed:',match?.[0]||(e as {code?:string}).code||'CHECK_FAILED');process.exitCode=1;}

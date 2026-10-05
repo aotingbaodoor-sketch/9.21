@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import pg from "pg";
 import type EmbeddedPostgres from "embedded-postgres";
-type Options = NonNullable<ConstructorParameters<typeof EmbeddedPostgres>[0]>;
+type Options = NonNullable<ConstructorParameters<typeof EmbeddedPostgres>[0]> & {fastIsolatedInit?:boolean};
 const exec = promisify(execFile);
 
 // Windows PostgreSQL 的原生程序使用系统代码页。中文路径会污染 UTF8 初始化脚本。
@@ -22,6 +22,11 @@ export async function localPostgres(options: Options) {
     throw new Error("缺少本地数据库配置");
   if (/[^ -~]/.test(options.databaseDir))
     throw new Error("Windows LOCAL_DB_DIR 需要使用不含中文的持久目录");
+  if(options.fastIsolatedInit){
+    const relative=path.relative(os.tmpdir(),path.resolve(options.databaseDir));
+    if(relative.startsWith('..')||path.isAbsolute(relative)||!relative.startsWith('autinberg-'))
+      throw new Error('快速初始化仅限新建AUTINBERG临时测试目录，不能用于持久业务库');
+  }
   const native = path.resolve(
     path.dirname(
       createRequire(import.meta.url).resolve("@embedded-postgres/windows-x64"),
@@ -70,6 +75,7 @@ export async function localPostgres(options: Options) {
             "--auth=scram-sha-256",
             "--encoding=UTF8",
             "--locale=C",
+            ...(options.fastIsolatedInit?['--no-sync']:[]),
           ],
           { cwd: runtime, windowsHide: true, timeout: 120000 },
         );

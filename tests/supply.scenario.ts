@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { User } from "../shared/contracts.ts";
 import type { fixtures } from "./quoting.fixtures.ts";
-import { prepareTestProduction } from './order-workflow.fixture.ts';
+import { prepareTestProduction,startTestProduction } from './order-workflow.fixture.ts';
 
 type Agent = { cookie: string; csrf: string; user: User };
 // The harness intentionally accepts arbitrary API response shapes so assertions
@@ -55,8 +55,9 @@ export async function supplyScenario(ctx: {
   const sales = await ok(a, `/supply/orders/${salesId}`);
   assert.equal(sales.order.snapshot, undefined);
   assert.ok(!JSON.stringify(sales).includes("unitPrice"));
-  await prepareTestProduction(ok,admin,salesId,projectId,sales.items);
+  const prepared=await prepareTestProduction(ok,admin,salesId,projectId,sales.items);
   const purchaseId = (await ok(admin, `/supply/orders/${salesId}/purchase-orders`, "POST", { factoryId, itemIds: [sales.items[0].id], promisedDate: null })).id;
+  await startTestProduction(ok,admin,salesId,prepared,purchaseId);
   const base = `/supply/purchase-orders/${purchaseId}`;
   assert.equal((await request(admin, `/supply/orders/${salesId}/purchase-orders`, "POST", { factoryId, itemIds: [sales.items[0].id], promisedDate: null })).status, 409);
   let order = await ok(fa, base);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { mkdir,cp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Server } from "node:http";
@@ -10,6 +10,8 @@ import { database, migrate } from "../server/db.ts";
 import { createApp } from "../server/app.ts";
 import { hashPassword } from "../server/domain.ts";
 import { backup, restore } from "../server/backup.ts";
+import {allocatePartner,allocateCustomerCode} from '../server/customer-code-store.ts';
+import {registerDocument} from '../server/document-registry.ts';
 
 const root = path.join(os.tmpdir(), "autinberg-order-gates", randomUUID());
 await mkdir(root, { recursive: true });
@@ -21,6 +23,7 @@ const pg = await localPostgres({
   user: "postgres",
   password: secret,
   persistent: true,
+  fastIsolatedInit:true,
   onLog: () => {},
   onError: () => {},
 });
@@ -111,6 +114,8 @@ try {
     "INSERT INTO quotation_projects(id,customer_id,name,created_by) VALUES($1,$2,'Isolated gate test',$3)",
     [projectId, customerId, adminId],
   );
+  const partner=await allocatePartner(pool,{userId:salesId,joinYear:2026,name:'ISOLATED first developer',market:'TEST'});
+  await allocateCustomerCode(pool,{customerId,partnerId:partner.id,firstContactDate:'2026-10-04',source:'new'});
   await pool.query(
     "INSERT INTO quotation_versions(id,project_id,number,input,snapshot,customer_snapshot,reason,status,issued_at,created_by) VALUES($1,$2,1,'{}','{\"issues\":[],\"total\":100}','{}','TEST','confirmed',now(),$3)",
     [quoteId, projectId, adminId],
@@ -135,6 +140,7 @@ try {
     "INSERT INTO factory_users(factory_id,user_id,status) VALUES($1,$2,'approved')",
     [factoryId, factoryUser],
   );
+  const web=path.join(root,'web');await mkdir(web,{recursive:true});await cp(path.resolve('dist'),path.join(web,'dist'),{recursive:true});process.chdir(web);
   server = createApp(pool, { origin, serveStatic:true }).listen(4607, "127.0.0.1");
   await new Promise<void>((resolve) => server!.once("listening", resolve));
   const admin = await login("admin@test.invalid"),
@@ -185,7 +191,7 @@ try {
   await page.getByLabel('邮箱',{exact:true}).fill('admin@test.invalid');
   await page.getByLabel('密码',{exact:true}).fill(password);
   await page.getByRole('button',{name:'登录',exact:true}).click();
-  await expect(page).not.toHaveURL(/login/);
+  await expect(page.getByRole('button',{name:'退出',exact:true})).toBeVisible({timeout:15000});
   await page.goto(origin+'/supply');
   await page.getByRole('button',{name:/TEST-ORDER/}).click();
   await expect(page.getByRole('button',{name:'创建工厂采购草稿',exact:true})).toBeDisabled();
@@ -204,6 +210,11 @@ try {
     first,
   );
   assert.equal(first.state, "已收定金");
+  await registerDocument(pool,{classCode:'AR',customerIds:[customerId],date:'2026-10-05',businessKind:'isolated_legacy_receipt',businessId:quoteOrder,requestKey:randomUUID(),actorId:adminId},async(db,d)=>{
+    await db.query('INSERT INTO quotation_deposits(id,quotation_order_id,document_id,data,created_by) VALUES($1,$2,$3,$4,$5)',[randomUUID(),quoteOrder,d.id,JSON.stringify(deposit),adminId]);
+  });
+  const confirmation=await ok(admin,`/quoting/projects/${projectId}/files`,{name:'ISOLATED confirmation.pdf',mime:'application/pdf',data:Buffer.from('%PDF-1.4\nISOLATED confirmation').toString('base64'),kind:'confirmation'});
+  const wo=await ok(admin,'/supply/chain',{salesOrderId:orderId,confirmationFileId:confirmation.id,orderType:'bulk',expectedDelivery:'2027-01-01',tradeTerm:'FOB'});
   const po = (await ok(admin, endpoint + "/purchase-orders", draft)).id;
   const confirm = {
     price: 100,
@@ -280,6 +291,8 @@ try {
       .status,
     409,
   );
+  await ok(admin,`/supply/chain/${wo.id}/manufacturing`,{purchaseOrderId:po,technical:{profile:'6063-T5',glass:'5+12A+5',hardware:'Sealed H1',finish:'RAL 9016',sampleReference:'Sealed S1',packing:'Timber crate',requiredDate:'2027-01-01'}});
+  await ok(admin,`/supply/chain/${wo.id}/advance`,{stage:'material_ready',fileId:confirmation.id,inspectionResult:'passed',note:'ISOLATED IQC'});
   const issued = await Promise.all([
     request(admin, endpoint + "/evidence", {
       kind: "instruction",
@@ -375,6 +388,7 @@ try {
   );
 } finally {
   await browser?.close();
+  server?.closeAllConnections();
   if (server)
     await new Promise<void>((resolve, reject) =>
       server!.close((e) => (e ? reject(e) : resolve())),

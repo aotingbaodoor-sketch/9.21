@@ -4,11 +4,11 @@ import { execFileSync } from 'node:child_process';
 import { MENU, visibleMenu, menuLinks, activeMenu, ancestorIds, type MenuNode } from '../src/crm/navigation.ts';
 import type { User } from '../shared/contracts.ts';
 
-test('V2.1 exact roots, 22 primary positions, one pricing reference', () => {
+test('V2.1 roots preserved, 22 old plus three fulfillment/settings positions, one pricing reference', () => {
   const nodes = visibleMenu('admin');
   assert.deepEqual(nodes.map(n => n.id), ['dashboard','governance','ms','tec','scm','adm','it','workflow','communication','master-data','settings-group']);
   const links = menuLinks(nodes);
-  assert.equal(links.filter(n => !n.reference).length, 22);
+  assert.equal(links.filter(n => !n.reference).length, 25);
   assert.equal(links.filter(n => n.reference).length, 1);
   assert.equal(new Set(links.map(n => n.id)).size, links.length);
   assert.equal(nodes.find(n => n.id === 'tec')!.children!.length, 2);
@@ -22,7 +22,11 @@ test('all six existing role route sets preserved; only universal workbench redir
   for (const role of ['admin','sales','technical','logistics','factory','coordinator'] as User['role'][]) {
     const old = new Set(legacy({role}, ['technical','logistics','factory','coordinator'].includes(role)).map(([href]) => href));
     old.add('/dashboard'); // Existing route still redirects specialists to their original authorized page.
-    assert.deepEqual([...new Set(menuLinks(visibleMenu(role)).map(n => n.href!.split('?')[0]))].sort(), [...old].sort(), role);
+    const links=menuLinks(visibleMenu(role));
+    assert.deepEqual([...new Set(links.filter(n=>!['order-chain','numbering','document-classes'].includes(n.id)).map(n => n.href!.split('?')[0]))].sort(), [...old].sort(), role);
+    assert.equal(links.some(n=>n.id==='order-chain'),role!=='factory');
+    assert.equal(links.some(n=>n.id==='numbering'),role==='admin');
+    assert.equal(links.some(n=>n.id==='document-classes'),role==='admin');
   }
 });
 

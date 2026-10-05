@@ -344,6 +344,7 @@ export function CustomerDetail(actions: CustomerActions) {
         action={
           <div className="actions">
             <Link to="/customers">返回客户列表</Link>
+            <Link to={`/customers/${c.id}/chain`}>单据与履约追溯</Link>
             <button onClick={() => actions.edit(c)}>编辑</button>
             <button className="primary" onClick={() => actions.follow(c)}>
               添加跟进

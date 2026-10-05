@@ -1,4 +1,5 @@
 import { useState } from "react";
+import {Link} from 'react-router-dom';
 import { useMutation } from "./api.ts";
 import { useSession } from "./context.tsx";
 import { ErrorBox, Field, Panel } from "./ui.tsx";
@@ -15,6 +16,7 @@ const conditions = [
   ["installationConfirmed", "安装已确认"],
 ] as const;
 export type Workflow = {
+  chain?:{work_order_id:string;current_stage:string;dimensions_locked:boolean;ready:boolean}|null;
   state: string;
   projectId: string;
   evidence: Record<string, boolean>;
@@ -57,7 +59,7 @@ export function OrderWorkflow({
   const busy = m.busy || upload.busy;
   const instructionReady = conditions
     .slice(0, 5)
-    .every(([key]) => data.evidence[key]);
+    .every(([key]) => data.evidence[key]) && data.chain?.ready===true;
   const save = (body: unknown) =>
     void m.run(`/supply/orders/${id}/evidence`, "POST", body, () => {
       refresh();
@@ -98,7 +100,7 @@ export function OrderWorkflow({
     <Panel title="订单履约条件与证据">
       <h3>业务阶段：{data.state}</h3>
       <p>
-        收定金后仅可准备采购草稿。量尺、最终尺寸及正式生产指令齐备后才能生产；物流签收不等于安装完结。
+        财务收款确认后先签发WO再开PO。量尺、最终尺寸、正式MO和IQC齐备后才能生产；物流签收不等于安装完结。
       </p>
       <ul>
         {conditions.map(([key, label]) => (
@@ -281,6 +283,8 @@ export function OrderWorkflow({
             确认全部最终尺寸
           </button>
           <h3>正式下达生产指令</h3>
+          <p><Link to={data.chain?`/supply/chain/${data.chain.work_order_id}`:'/supply/chain'}>进入订单履约链核实WO、MO与IQC</Link></p>
+          {!data.chain?.ready&&!data.evidence.productionInstructionIssued&&<p>尚须完成：已签发WO、全部有效PO对应的MO，以及原材料备齐/IQC核验。</p>}
           {!instructionReady && (
             <p role="status">
               尚缺：
