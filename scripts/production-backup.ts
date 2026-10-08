@@ -3,6 +3,7 @@ import {execFileSync} from 'node:child_process';
 import {readFileSync,mkdirSync,writeFileSync} from 'node:fs';
 import {createCipheriv,createHash,randomBytes} from 'node:crypto';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import pg from 'pg';
 import {matchesMigrationChecksum} from '../server/migration-checksum.ts';
 const [cli,destination]=process.argv.slice(2);
@@ -12,13 +13,13 @@ try {
  const vars=JSON.parse(execFileSync(cli,['variable','list','--json'],{encoding:'utf8',stdio:['ignore','pipe','pipe']}));
  const url=new URL(vars.DATABASE_URL);for(const k of ['sslmode','sslrootcert','sslcert','sslkey'])url.searchParams.delete(k);
  process.env.PGPASSWORD=vars.PGPASSWORD;
- pool=new pg.Pool({connectionString:url.toString(),ssl:{ca:readFileSync('config/supabase-prod-ca.crt','utf8'),rejectUnauthorized:true},max:1,connectionTimeoutMillis:15000,statement_timeout:30000});
+ pool=new pg.Pool({connectionString:url.toString(),ssl:{ca:readFileSync(new URL('../config/supabase-prod-ca.crt',import.meta.url),'utf8'),rejectUnauthorized:true},max:1,connectionTimeoutMillis:15000,statement_timeout:30000});
  const db=await pool.connect();
  let payload;
  try {
   await db.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
   const migrations=(await db.query('SELECT name,checksum FROM schema_migrations ORDER BY name')).rows;
-  const definitions=migrations.map(m=>{const sql=readFileSync(path.join('server/migrations',m.name),'utf8');if(!matchesMigrationChecksum(sql,m.checksum))throw new Error('MIGRATION_CHECKSUM');return {name:m.name,sql};});
+  const definitions=migrations.map(m=>{const sql=readFileSync(fileURLToPath(new URL('../server/migrations/'+m.name,import.meta.url)),'utf8');if(!matchesMigrationChecksum(sql,m.checksum))throw new Error('MIGRATION_CHECKSUM');return {name:m.name,sql};});
   const tables:Record<string,unknown[]>={};
   // PostgreSQL JSON preserves full timestamp precision and DATE values, avoiding
   // the JavaScript Date millisecond conversion during backup.

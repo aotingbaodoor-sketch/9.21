@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useResource } from './api.ts';
 import { useSession } from './context.tsx';
 import { ErrorBox, Field, Loading, Panel } from './ui.tsx';
+import {FulfillmentApprovers} from './Settlement.tsx';
 
 const fields = [
   ['sla_assign_minutes','客资分配时限（分钟）'],
@@ -16,7 +17,7 @@ export function WorkflowSettings() {
   const {data,error,loading}=useResource<Config>('/settings/workflow');
   if (loading) return <Loading />;
   if (!data) return <ErrorBox message={error} />;
-  return <WorkflowForm initial={data}/>;
+  return <><WorkflowForm initial={data}/><FulfillmentApprovers/></>;
 }
 function WorkflowForm({initial}:{initial:Config}) {
   const [form,setForm]=useState(initial), mutation=useMutation(), {notify}=useSession();

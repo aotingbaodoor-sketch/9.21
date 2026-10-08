@@ -43,6 +43,7 @@ import {registerCustomerIdentity} from './customer-identity-routes.ts';
 import {registerPricing} from './pricing/routes.ts';
 import {registerOrderChain} from './supply/chain.ts';
 import {registerNumbering} from './numbering-routes.ts';
+import {registerSettlement} from './supply/settlement.ts';
 
 declare global {
   namespace Express {
@@ -280,6 +281,7 @@ export function createApp(pool: pg.Pool, options: Options) {
   registerPricing(app,pool,mutate);
   registerSupplyRoutes(app, pool, mutate);
   registerOrderChain(app,pool,mutate);
+  registerSettlement(app,pool,mutate);
   registerNumbering(app,pool,mutate);
   registerCustomerIdentity(app,pool,mutate);
   app.get("/api/customers", async (req, res) =>

@@ -164,7 +164,7 @@ try {
     [
       quoteId,
       projectId,
-      "{}",
+      '{"currency":"USD"}',
       '{"issues":[],"total":100}',
       "{}",
       "ISOLATED",
@@ -555,6 +555,54 @@ try {
     21,
   );
   passed("Class switches immediate, no restart; issued documents unchanged");
+  const settlePath=`/supply/chain/${work.id}`;
+  const receiptInput={amount:'70.00',currency:'USD',bankReference:'ISOLATED-BALANCE',receivedAt:new Date().toISOString(),fileId:file.id};
+  assert.equal((await request(admin,settlePath+'/receipts',receiptInput)).status,409);
+  assert.equal((await request(sales,settlePath+'/receipts',receiptInput)).status,403);
+  assert.equal((await request(admin,'/settings/fulfillment-approvers',{financeUserId:adminId,releaseUserId:adminId},randomUUID(),'PUT')).status,200);
+  const checks={shipper:true,consignee:true,goods:true,quantity:true,amount:true,seal:true};
+  const terms={method:'B',customerForwarder:false,billType:'to_order',depositPercent:30,contractFileId:file.id,repeatFileId:file.id,blChecks:checks};
+  assert.equal((await request(admin,settlePath+'/payment-terms',{...terms,customerForwarder:true})).status,422);
+  assert.equal((await request(admin,settlePath+'/payment-terms',{...terms,depositPercent:29})).status,400);
+  assert.equal((await request(admin,settlePath+'/payment-terms',{...terms,billType:'seaway'})).status,409);
+  await ok(admin,settlePath+'/payment-terms',terms);
+  assert.equal((await request(admin,settlePath+'/release',{releaseType:'original_bl',fileId:file.id,confirmSettled:true})).status,409);
+  assert.equal((await request(admin,`/supply/purchase-orders/${po.id}/shipments`,{})).status,409);
+  assert.equal((await request(admin,`/supply/purchase-orders/${po.id}/shipments/${randomUUID()}/dispatch`,{version:1})).status,409);
+  await ok(admin,settlePath+'/forwarder',{source:'we_arranged',company:'ISOLATED Forwarder',contact:'TEST Contact',channel:'TEST Telephone',pickupAt:new Date().toISOString(),port:'TEST Port',vehicle:'TEST Vehicle',driver:'TEST Driver',fileId:file.id});
+  const poDetail=await ok(admin,`/supply/purchase-orders/${po.id}`);
+  await ok(factory,`/supply/purchase-orders/${po.id}/confirm`,{version:poDetail.order.version,price:10,promisedDate:'2026-10-30',note:'ISOLATED confirmation'});
+  const stageBody=(stage:string)=>({stage,fileId:file.id,note:'ISOLATED verified event',occurredAt:new Date().toISOString()});
+  assert.equal((await request(admin,settlePath+'/verify-stage',stageBody('shipped'))).status,409);
+  await ok(admin,settlePath+'/verify-stage',stageBody('sample_approved'));
+  assert.equal((await request(admin,settlePath+'/verify-stage',stageBody('production_done'))).status,422);
+  await ok(admin,`/supply/purchase-orders/${po.id}/quality`,{status:'passed',note:'ISOLATED FQC',checklist:[{name:'TEST check',passed:true}]});
+  await ok(admin,settlePath+'/verify-stage',stageBody('production_done'));
+  assert.equal((await request(admin,settlePath+'/verify-stage',stageBody('packed'))).status,409);
+  const purchaseItem=(await pool.query('SELECT id FROM purchase_order_items WHERE purchase_order_id=$1',[po.id])).rows[0];
+  await ok(factory,`/supply/purchase-orders/${po.id}/packages`,{label:'ISOLATED package',lengthMm:1000,widthMm:1000,heightMm:1000,netKg:20,grossKg:25,items:[{itemId:purchaseItem.id,quantity:2}]});
+  for(const step of ['packed','shipment_checked','forwarder_assigned'])await ok(admin,settlePath+'/verify-stage',stageBody(step));
+  assert.equal((await request(admin,settlePath+'/verify-stage',stageBody('picked_up'))).status,409);
+  for(const type of ['pickup_receipt','packing_evidence','export_release','bl_copy','departure_notice','arrival_notice','destination_release']){
+   const log=await ok(admin,settlePath+'/logistics',{docType:type,fileId:file.id,sourceName:'ISOLATED forwarder',receivedOn:new Date().toISOString(),externalNo:'TEST-'+type});
+   await ok(admin,settlePath+`/logistics/${log.id}/check`,{result:'matched'});
+  }
+  for(const step of ['picked_up','loaded','export_cleared','shipped'])await ok(admin,settlePath+'/verify-stage',stageBody(step));
+  assert.equal((await ok(admin,settlePath+'/settlement')).settled,false,'B may ship at 30%, but never release documents unpaid');
+  assert.equal((await request(admin,settlePath+'/release',{releaseType:'telex',fileId:file.id,confirmSettled:true})).status,409);
+  await assert.rejects(pool.query("INSERT INTO crm_document_releases(work_order_id,release_type,file_id,released_by,settlement_snapshot) VALUES($1,'telex',$2,$3,'{}')",[work.id,file.id,adminId]),/G-12/);
+  assert.equal((await request(admin,settlePath+'/receipts',{...receiptInput,bankReference:'ISOLATED'})).status,409);
+  const rk=randomUUID(),receipt=await ok(admin,settlePath+'/receipts',receiptInput,rk);
+  assert.deepEqual(await ok(admin,settlePath+'/receipts',receiptInput,rk),receipt);
+  assert.deepEqual(await ok(admin,settlePath+'/receipts',receiptInput),receipt);
+  assert.equal((await ok(sales,settlePath+'/settlement')).receipts.length,0);
+  assert.equal((await request(other,settlePath+'/settlement')).status,404);
+  assert.equal((await ok(admin,settlePath)).order.current_stage,'shipped','early payment must not jump the state');
+  await ok(admin,settlePath+'/release',{releaseType:'original_bl',fileId:file.id,confirmSettled:true});
+  for(const step of ['departed','arrived','dest_cleared','balance_settled'])await ok(admin,settlePath+'/verify-stage',stageBody(step));
+  await assert.rejects(pool.query('UPDATE crm_order_receipts SET amount=1 WHERE id=$1',[receipt.id]));
+  await assert.rejects(pool.query('DELETE FROM crm_document_releases WHERE work_order_id=$1',[work.id]));
+  passed('Actual FOB payment/forwarder chain: missing approvers, B shipment, unpaid release HTTP+DB gate, bank replay, immutable AR, sequential states and isolation');
   await local.createDatabase("chain_restore");
   const restored = database(
     `postgresql://postgres:${password}@127.0.0.1:55620/chain_restore`,
@@ -667,6 +715,11 @@ try {
       await expect(
         page.getByRole("button", { name: "退出", exact: true }),
       ).toBeVisible({ timeout: 15000 });
+      await page.goto(origin + "/settings");
+      await expect(page.getByRole('heading', {name:'履约财务核验与放单职责',exact:true})).toBeVisible();
+      await page.getByLabel("财务核验人").selectOption(adminId);
+      await page.getByRole("button", { name: "保存核验职责", exact: true }).click();
+      await expect(page.getByText("核验职责已保存并记录审计", { exact: true })).toBeVisible();
       await page.goto(origin + "/supply/chain");
       await expect(
         page.getByRole("heading", { name: "订单履约链", exact: true }),
@@ -675,6 +728,13 @@ try {
       await expect(
         page.getByRole("heading", { name: "22态履约进度" }),
       ).toBeVisible();
+      await page.getByText("登记追加到账（财务核验）", { exact: true }).click();
+      await page.getByLabel("本次实际到账金额 USD", { exact: true }).fill("1");
+      await page.getByLabel("银行流水号", { exact: true }).fill("ISOLATED");
+      await page.getByLabel("实际到账时间", { exact: true }).fill(new Date(Date.now()-60000).toISOString().slice(0,16));
+      await page.getByLabel("到账凭证").selectOption(file.id);
+      await page.getByRole("button", { name: "财务确认到账", exact: true }).click();
+      await expect(page.getByText("该银行流水已经作为定金入账，不能重复登记", { exact: true })).toBeVisible();
       await page.screenshot({
         path: path.join(out, "chain-desktop.png"),
         fullPage: true,
@@ -714,7 +774,7 @@ try {
       );
       assert.deepEqual(errors, []);
       passed(
-        "Rendered desktop/mobile: login, WO drilldown, MO factory projection, class configuration, no page errors",
+        "Rendered desktop/mobile: login, approval settings saved, duplicate receipt form rejected, WO drilldown, MO factory projection, class configuration, no page errors",
       );
     } finally {
       await Promise.race([

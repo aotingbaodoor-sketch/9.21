@@ -39,7 +39,7 @@ async function orderedQuantity(db: SupplyDb, orderId: string) {
     ).rows[0].quantity,
   );
 }
-async function shippingReady(db: SupplyDb, orderId: string) {
+export async function shippingReady(db: SupplyDb, orderId: string) {
   const order=(await db.query('SELECT sales_order_id FROM purchase_orders WHERE id=$1',[orderId])).rows[0];
   if(!order) throw new HttpError(404,'工厂订单不存在');
   await requireOrderExecution(db,order.sales_order_id);
@@ -509,6 +509,7 @@ export function registerFulfillment(
     mutate(req, res, async (db) => {
       const order = await purchaseOrder(db, req.actor, id(req), true);
       operator(req.actor);
+      if(order.work_order_id)throw new HttpError(409,'新工单的发运和放单请在订单履约链核验；禁止通过旧SH发货入口绕过');
       await active(db,order);
       const input = shipmentSchema.parse(req.body);
       const packages = await db.query(
@@ -558,6 +559,7 @@ export function registerFulfillment(
       mutate(req, res, async (db) => {
         const order = await purchaseOrder(db, req.actor, id(req), true);
         reviewer(req.actor);
+        if(order.work_order_id)throw new HttpError(409,'请在订单履约链按A/B/C核实装船和付款，不允许从旧入口发运');
         await active(db,order);
         const v = version.parse(req.body.version),
           shipmentId = z.uuid().parse(req.params.shipmentId);
@@ -610,6 +612,7 @@ export function registerFulfillment(
       mutate(req, res, async (db) => {
         const order = await purchaseOrder(db, req.actor, id(req), true);
         reviewer(req.actor);
+        if(order.work_order_id)throw new HttpError(409,'新工单签收必须关联真实POD，不允许从旧文字签收入口绕过');
         const input = z
             .object({ version, evidence: note.min(5) })
             .parse(req.body),

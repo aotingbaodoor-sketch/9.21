@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { useMutation, useResource } from "./api.ts";
 import { useSession } from "./context.tsx";
 import { ErrorBox, Loading, Field } from "./ui.tsx";
+import Settlement from './Settlement.tsx';
 
 type Item = {
   id: string;
@@ -50,7 +51,7 @@ function ChainList() {
         <h2>订单履约链</h2>
         <p>客户编号贯穿 · WO → PO → MO。旧订单与履约页面仍保留。</p>
         <p className="muted">
-          当前已开放工单、采购、生产指令、IQC和投产前段，以及物流回传登记。后续验收、放单、变更及关闭尚未开放，不会自动标记完成。
+          已开放工单、生产指令、物流凭证及FOB付款核验。节点须逐项核实；签收验收、变更与关闭仍待后续验收，不会自动标记完成。
         </p>
         <p>
           <Link to="/supply">原订单与履约</Link> ·{" "}
@@ -231,6 +232,7 @@ function ChainDetail({ id }: { id: string }) {
         <Link to="/supply">打开原订单页面开立采购订单</Link>
       </section>
       <section className="card">
+        <Settlement id={id} files={files} projectId={w.project_id}/>
         <h2>22态履约进度</h2>
         <p>尚未完成验收的后续节点保持待办，不自动推成“已完成”。</p>
         {user.role === "admin" &&

@@ -45,7 +45,7 @@ const joins = `FROM crm_work_orders w JOIN crm_document_registry d ON d.id=w.doc
  JOIN customers c ON c.id=w.customer_id JOIN sales_orders so ON so.id=w.sales_order_id
  JOIN quotation_orders qo ON qo.id=so.quotation_order_id`;
 const scope = `( $1='admin' OR ($1='sales' AND c.owner_id=$2) OR ($1 IN ('technical','logistics','coordinator') AND w.scm_owner=$2))`;
-async function workOrder(db: Db, actor: User, id: string, lock = false) {
+export async function workOrder(db: Db, actor: User, id: string, lock = false) {
   const row = (
     await db.query(
       `SELECT w.*,d.doc_no,so.order_number,c.company,c.owner_id,qo.project_id ${joins}
@@ -56,7 +56,7 @@ async function workOrder(db: Db, actor: User, id: string, lock = false) {
   if (!row) throw new HttpError(404, "工单不存在或未授权");
   return row;
 }
-async function event(
+export async function event(
   db: Db,
   w: { id: string; customer_id: string; current_stage: string },
   actor: User,
@@ -201,7 +201,7 @@ export async function factorySafe(db: Db, value: unknown) {
       );
   }
 }
-async function validProjectFile(db: Db, fileId: string, projectId: string) {
+export async function validProjectFile(db: Db, fileId: string, projectId: string) {
   if (
     !(
       await db.query(

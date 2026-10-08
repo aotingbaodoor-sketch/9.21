@@ -42,6 +42,7 @@ type Detail = {
     status: string;
     version: number;
     coordinator_id: string | null;
+    work_order_id?: string | null;
     factory_confirmed_at: string | null;
     factory_confirmed_price?: string;
     promised_date: string | null;
@@ -315,7 +316,8 @@ export function Purchase({ id }: { id: string }) {
             {p.gross_kg} kg · {p.shipment_id ? "已分配批次" : "待安排发货"}
           </div>
         ))}
-        {canEdit && active && (
+        {x.order.work_order_id&&<p>新工单请在“订单履约链”核实发运、付款与放单，旧发货入口已禁用。</p>}
+        {canEdit && active && !x.order.work_order_id && (
           <ShipmentForm
             base={base}
             packages={flow.packages.filter((p) => !p.shipment_id)}
@@ -326,7 +328,7 @@ export function Purchase({ id }: { id: string }) {
             key={s.id}
             shipment={s}
             base={base}
-            canReview={canReview}
+            canReview={canReview&&!x.order.work_order_id}
           />
         ))}
       </Panel>
