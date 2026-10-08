@@ -72,6 +72,7 @@ export const MENU: readonly MenuNode[] = [
   { id: 'master-data', label: '8 主数据与编码', children: [link('numbering', '8.7 统一发号台账', '/master-data/numbering', ['admin']),link('import', '8.8 旧数据导入', '/import', ['admin'])] },
   { id: 'settings-group', label: '9 系统设置', children: [
     link('document-classes', '9.1 单据类码', '/settings/document-classes', ['admin']),
+    link('backups', '9.6 备份与恢复', '/settings/backups', ['admin']),
     link('settings', '系统设置', '/settings', office),
     link('channel-account', '我的账号与渠道绑定', '/whatsapp/account', office),
     link('price-policy', '价格政策（引用）', '/quotations/settings?entry=price-policy', ['admin'], { reference: true }),

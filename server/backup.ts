@@ -102,6 +102,8 @@ const tables = [
   "crm_delivery_visits",
   "crm_order_close_confirmations",
   "crm_work_order_close",
+  "automation_rule",
+  "crm_backup_runs",
 ] as const;
 type Snapshot = {
   format: "autinberg-backup-v1";
@@ -122,8 +124,14 @@ export async function backup(pool: pg.Pool) {
       ).rows,
       tables: {},
     };
-    for (const name of tables)
-      data.tables[name] = (await db.query(`SELECT * FROM ${name}`)).rows;
+    let size=0;
+    for (const name of tables) {
+      // PostgreSQL JSON retains microseconds and bytea; driver Date conversion does not.
+      const rows=(await db.query(`SELECT row_to_json(t) AS row FROM ${name} t`)).rows.map(r=>r.row);
+      size+=Buffer.byteLength(JSON.stringify(rows));
+      if(size>128*1024*1024)throw new Error('Snapshot size limit');
+      data.tables[name]=rows;
+    }
     return data;
   });
   const serialized = JSON.stringify(payload);
@@ -153,7 +161,7 @@ export async function restore(
     )
       throw new Error("迁移版本与备份不一致，请使用对应版本代码恢复");
     for (const name of tables.filter(
-      (n) => !["settings","whatsapp_settings","quotation_settings","crm_document_class","crm_runtime_config","pricing_sync_config","crm_fulfillment_stage","crm_logistics_doc_type","crm_fulfillment_approvers","crm_fulfillment_policy"].includes(n),
+      (n) => !["settings","whatsapp_settings","quotation_settings","crm_document_class","crm_runtime_config","pricing_sync_config","crm_fulfillment_stage","crm_logistics_doc_type","crm_fulfillment_approvers","crm_fulfillment_policy","automation_rule"].includes(n),
     ))
       if ((await db.query(`SELECT 1 FROM ${name} LIMIT 1`)).rowCount)
         throw new Error(
@@ -175,9 +183,9 @@ export async function restore(
         const keys = Object.keys(row);
         if (!keys.length || keys.some((k) => !columns.has(k)))
           throw new Error("备份字段无效");
-        const seedKey = ['crm_document_class','crm_fulfillment_stage','crm_logistics_doc_type'].includes(name) ? 'code' : name === 'crm_runtime_config' ? 'key' : 'id';
+        const seedKey = ['crm_document_class','crm_fulfillment_stage','crm_logistics_doc_type','automation_rule'].includes(name) ? 'code' : name === 'crm_runtime_config' ? 'key' : 'id';
         const onConflict =
-          ["settings","whatsapp_settings","quotation_settings","crm_document_class","crm_runtime_config","pricing_sync_config","crm_fulfillment_stage","crm_logistics_doc_type","crm_fulfillment_approvers","crm_fulfillment_policy"].includes(name)
+          ["settings","whatsapp_settings","quotation_settings","crm_document_class","crm_runtime_config","pricing_sync_config","crm_fulfillment_stage","crm_logistics_doc_type","crm_fulfillment_approvers","crm_fulfillment_policy","automation_rule"].includes(name)
             ? ` ON CONFLICT(${seedKey}) DO UPDATE SET ${keys
                 .filter((k) => k !== seedKey)
                 .map((k) => `"${k}"=EXCLUDED."${k}"`)

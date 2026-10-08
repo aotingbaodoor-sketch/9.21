@@ -45,6 +45,7 @@ import {registerOrderChain} from './supply/chain.ts';
 import {registerNumbering} from './numbering-routes.ts';
 import {registerSettlement} from './supply/settlement.ts';
 import {registerCompletion} from './supply/completion.ts';
+import {registerBackup} from './backup-routes.ts';
 
 declare global {
   namespace Express {
@@ -284,6 +285,7 @@ export function createApp(pool: pg.Pool, options: Options) {
   registerOrderChain(app,pool,mutate);
   registerSettlement(app,pool,mutate);
   registerCompletion(app,pool,mutate);
+  registerBackup(app,pool,mutate);
   registerNumbering(app,pool,mutate);
   registerCustomerIdentity(app,pool,mutate);
   app.get("/api/customers", async (req, res) =>

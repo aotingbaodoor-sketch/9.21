@@ -5,6 +5,7 @@ import { createWhatsAppService } from "./whatsapp/service.ts";
 import { waConfig } from "./whatsapp/security.ts";
 import { createLinkedWorker } from "./whatsapp/linked-worker.ts";
 import {createPricingWorker} from './pricing/sync.ts';
+import {createBackupWorker} from './cloud-backup.ts';
 if (!process.env.DATABASE_URL)
   throw new Error("缺少 DATABASE_URL，请配置服务器环境变量");
 const pool = database(process.env.DATABASE_URL),
@@ -18,6 +19,10 @@ const app = createApp(pool, {
 const whatsapp = createWhatsAppService(pool, waConfig());
 const linked = createLinkedWorker(pool, waConfig());
 const prices=createPricingWorker(pool);
+const backups=createBackupWorker(pool);
+const backupTick=()=>backups.tick().catch(()=>console.error('云端备份任务异常；未输出敏感内容，请检查9.6备份恢复'));
+const backupTimer=setInterval(backupTick,60000);backupTimer.unref();
+void backupTick();
 const pricingTick=()=>prices.tick().catch(()=>console.error('价格后台同步异常；凭据与原始错误未输出，请查看同步运行记录'));
 const pricingTimer=setInterval(pricingTick,60000);pricingTimer.unref();
 void pricingTick();
@@ -46,6 +51,7 @@ for (const signal of ["SIGTERM", "SIGINT"])
     clearInterval(waTimer);
     clearInterval(linkedTimer);
     clearInterval(pricingTimer);
+    clearInterval(backupTimer);
     server.close(() => {
       linked.stop().then(() => pool.end()).then(() => process.exit(0));
     });
