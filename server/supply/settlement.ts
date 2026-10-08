@@ -41,10 +41,10 @@ const termsSchema = z
       .strict(),
   })
   .strict();
-async function financialActor(
+export async function financialActor(
   db: Db,
   actor: User,
-  kind: "finance" | "release",
+  kind: "finance" | "release" | "cs" | "scm",
 ) {
   requireAdmin(actor);
   const p = (
@@ -53,7 +53,7 @@ async function financialActor(
   if (!p?.[kind + "_user_id"])
     throw new HttpError(
       409,
-      `尚未配置${kind === "finance" ? "财务核验" : "放单审批"}人员，不能自动通过`,
+      `尚未配置${({finance:'财务核验',release:'放单审批',cs:'客户关系确认',scm:'供应链关闭审批'})[kind]}人员，不能自动通过；请到系统设置配置`,
     );
   if (p[kind + "_user_id"] !== actor.id)
     throw new HttpError(403, "仅配置中的核验人员可以执行此操作");
@@ -145,11 +145,13 @@ export function registerSettlement(
         .object({
           financeUserId: uid.nullable(),
           releaseUserId: uid.nullable(),
+          csUserId: uid.nullable().optional(),
+          scmUserId: uid.nullable().optional(),
         })
         .strict()
         .parse(req.body);
       for (const id of new Set(
-        [input.financeUserId, input.releaseUserId].filter(Boolean),
+        [input.financeUserId, input.releaseUserId,input.csUserId,input.scmUserId].filter(Boolean),
       ))
         if (
           !(
@@ -169,8 +171,8 @@ export function registerSettlement(
         )
       ).rows[0];
       await db.query(
-        "UPDATE crm_fulfillment_approvers SET finance_user_id=$1,release_user_id=$2,updated_by=$3,updated_at=now() WHERE id=1",
-        [input.financeUserId, input.releaseUserId, req.actor.id],
+        "UPDATE crm_fulfillment_approvers SET finance_user_id=$1,release_user_id=$2,updated_by=$3,updated_at=now(),cs_user_id=$4,scm_user_id=$5 WHERE id=1",
+        [input.financeUserId, input.releaseUserId, req.actor.id,input.csUserId===undefined?before.cs_user_id:input.csUserId,input.scmUserId===undefined?before.scm_user_id:input.scmUserId],
       );
       await repo.audit(
         db,

@@ -603,6 +603,49 @@ try {
   await assert.rejects(pool.query('UPDATE crm_order_receipts SET amount=1 WHERE id=$1',[receipt.id]));
   await assert.rejects(pool.query('DELETE FROM crm_document_releases WHERE work_order_id=$1',[work.id]));
   passed('Actual FOB payment/forwarder chain: missing approvers, B shipment, unpaid release HTTP+DB gate, bank replay, immutable AR, sequential states and isolation');
+  const phase3Day=new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Shanghai'});
+  assert.equal((await request(other,settlePath+'/completion')).status,404);
+  assert.equal((await request(factory,settlePath+'/completion')).status,404);
+  const deliveryInput={podDocumentId:randomUUID(),deliveredOn:phase3Day,arrivalOn:phase3Day,signedBy:'ISOLATED Buyer Sign',packageCondition:'intact',containerNo:'TEST-CONTAINER'};
+  assert.equal((await request(sales,settlePath+'/delivery',deliveryInput)).status,409);
+  const podFile=await ok(sales,`/quoting/projects/${projectId}/files`,{name:'ISOLATED-POD.pdf',mime:'application/pdf',data:Buffer.from('%PDF-1.4 ISOLATED POD').toString('base64'),kind:'reference'});
+  const finalPod=await ok(sales,settlePath+'/logistics',{docType:'pod',fileId:podFile.id,sourceName:'ISOLATED consignee',receivedOn:new Date().toISOString(),externalNo:''});
+  deliveryInput.podDocumentId=finalPod.id;
+  assert.equal((await request(sales,settlePath+'/delivery',deliveryInput)).status,409,'unchecked POD cannot prove delivery');
+  await ok(admin,settlePath+`/logistics/${finalPod.id}/check`,{result:'matched'});
+  assert.equal((await request(other,settlePath+'/delivery',deliveryInput)).status,404);
+  const deliveryKey=randomUUID();await ok(sales,settlePath+'/delivery',deliveryInput,deliveryKey);await ok(sales,settlePath+'/delivery',deliveryInput,deliveryKey);
+  assert.equal((await pool.query('SELECT count(*)::int n FROM crm_delivery_acceptance')).rows[0].n,1);
+  await assert.rejects(pool.query("UPDATE crm_logistics_documents SET check_result='mismatch' WHERE id=$1",[finalPod.id]));
+  const acceptanceInput={result:'objection',occurredOn:phase3Day,note:'ISOLATED scratched part',fileId:file.id};
+  await ok(sales,settlePath+'/acceptance',acceptanceInput);
+  assert.equal((await request(sales,settlePath+'/acceptance',{...acceptanceInput,result:'accepted'})).status,409);
+  let completion=await ok(sales,settlePath+'/completion');
+  assert.equal(completion.cases.length,1);assert.equal((await ok(sales,settlePath)).order.current_stage,'delivered');
+  assert.equal((await request(other,settlePath+`/after-sales/${completion.cases[0].id}/resolve`,{action:'TEST replacement',followup:'TEST customer confirmed',fileId:file.id})).status,404);
+  await ok(sales,settlePath+`/after-sales/${completion.cases[0].id}/resolve`,{action:'TEST replacement',followup:'TEST customer confirmed',fileId:file.id});
+  await ok(sales,settlePath+'/acceptance',{...acceptanceInput,result:'accepted',note:'ISOLATED customer accepted after resolution'});
+  assert.equal((await request(sales,settlePath+'/warranty',{confirmDeliveryAnchor:true,warrantyFrom:'2020-01-01'})).status,400);
+  await ok(sales,settlePath+'/warranty',{confirmDeliveryAnchor:true});
+  completion=await ok(sales,settlePath+'/completion');
+  assert.equal(completion.warranty.from,phase3Day);assert.equal(completion.warranty.supplierSnapshot,undefined);
+  assert.equal((await ok(admin,settlePath+'/completion')).warranty.supplierSnapshot.length,5);
+  await assert.rejects(pool.query("UPDATE crm_delivery_acceptance SET delivered_on='2020-01-01' WHERE work_order_id=$1",[work.id]));
+  assert.equal((await request(admin,settlePath+'/close',{})).status,409,'missing SCM duty cannot close');
+  await ok(admin,'/settings/fulfillment-approvers',{financeUserId:adminId,releaseUserId:adminId,csUserId:adminId,scmUserId:adminId},undefined,'PUT');
+  assert.equal((await request(admin,settlePath+'/close',{})).status,409,'checkbox cannot replace the three signatures');
+  for(const kind of ['finance','cs','scm'])await ok(admin,settlePath+'/close-confirmation',{kind,fileId:file.id,note:'ISOLATED verified close condition'});
+  const lateCase=await ok(sales,settlePath+'/after-sales',{category:'TEST followup',description:'ISOLATED late issue',fileId:file.id,responsibleParty:'TEST Supplier'});
+  assert.equal((await request(admin,settlePath+'/close',{})).status,409);
+  await ok(sales,settlePath+`/after-sales/${lateCase.id}/resolve`,{action:'TEST resolved',followup:'TEST confirmed',fileId:file.id});
+  assert.equal((await request(admin,settlePath+'/close',{})).status,409,'CS signoff must be refreshed after a later case');
+  await ok(admin,settlePath+'/close-confirmation',{kind:'cs',fileId:file.id,note:'ISOLATED rechecked after resolution'});
+  await ok(sales,settlePath+'/visit',{visitedOn:phase3Day,installationSupport:'remote',result:'TEST installation successful',fileId:file.id});
+  assert.equal((await request(sales,settlePath+'/close',{})).status,403);
+  // Leave final closing to the browser when UI checks are requested.
+  if(!process.argv.includes('--ui'))await ok(admin,settlePath+'/close',{});
+  assert.equal((await ok(admin,settlePath+'/completion')).taxEnabled,false);
+  passed('Completion: matched POD, actual dates, immutable anchors, objections/AS, resolved issues, fresh three-party signatures, role isolation and four-condition closure');
   await local.createDatabase("chain_restore");
   const restored = database(
     `postgresql://postgres:${password}@127.0.0.1:55620/chain_restore`,
@@ -735,6 +778,18 @@ try {
       await page.getByLabel("到账凭证").selectOption(file.id);
       await page.getByRole("button", { name: "财务确认到账", exact: true }).click();
       await expect(page.getByText("该银行流水已经作为定金入账，不能重复登记", { exact: true })).toBeVisible();
+      await expect(page.getByRole('heading',{name:'签收、验收、质保与关闭',exact:true})).toBeVisible();
+      await page.getByText('核实四项条件并关闭工单',{exact:true}).click();
+      await page.getByRole('button',{name:'关闭工单（保留全部历史）',exact:true}).click();
+      await expect(page.getByText(/已于 .* 关闭。原凭证和编号永久保留/)).toBeVisible();
+      assert.equal((await ok(admin,settlePath)).order.current_stage,'closed');
+      assert.equal((await pool.query("SELECT count(*)::int n FROM crm_order_progress WHERE work_order_id=$1 AND status='completed'",[work.id])).rows[0].n,22);
+      await page.locator('#completion').screenshot({path:path.join(out,'completion-desktop.png')});
+      await page.setViewportSize({width:390,height:844});
+      await page.reload();
+      await expect(page.getByRole('heading',{name:'签收、验收、质保与关闭',exact:true})).toBeVisible();
+      await page.locator('#completion').screenshot({path:path.join(out,'completion-mobile.png')});
+      await page.setViewportSize({width:1440,height:1000});
       await page.screenshot({
         path: path.join(out, "chain-desktop.png"),
         fullPage: true,

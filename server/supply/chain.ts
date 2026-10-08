@@ -512,7 +512,6 @@ export function registerOrderChain(
   );
   app.post("/api/supply/chain/:id/logistics", async (req, res) =>
     mutate(req, res, async (db) => {
-      requireAdmin(req.actor);
       const w = await workOrder(db, req.actor, uid.parse(req.params.id), true);
       const input = z
         .object({
@@ -524,6 +523,7 @@ export function registerOrderChain(
         })
         .strict()
         .parse(req.body);
+      if(input.docType!=='pod')requireAdmin(req.actor);
       if (Date.parse(input.receivedOn) > Date.now())
         throw new HttpError(422, "回传时间不能在未来");
       if (

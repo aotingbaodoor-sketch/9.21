@@ -4,7 +4,7 @@ import { useMutation, useResource } from "./api.ts";
 import { useSession } from "./context.tsx";
 import { ErrorBox, Field, Loading, Panel } from "./ui.tsx";
 type File = { id: string; name: string };
-function FileChoice({
+export function FileChoice({
   files,
   value,
   onChange,
@@ -40,7 +40,9 @@ export function FulfillmentApprovers() {
     m = useMutation(),
     { notify } = useSession();
   const [finance, setFinance] = useState<string | undefined>(),
-    [release, setRelease] = useState<string | undefined>();
+    [release, setRelease] = useState<string | undefined>(),
+    [cs, setCs] = useState<string | undefined>(),
+    [scm, setScm] = useState<string | undefined>();
   if (r.loading) return <Loading />;
   return (
     <Panel title="履约财务核验与放单职责">
@@ -57,6 +59,8 @@ export function FulfillmentApprovers() {
             {
               financeUserId: (finance ?? r.data?.finance_user_id) || null,
               releaseUserId: (release ?? r.data?.release_user_id) || null,
+              csUserId: (cs ?? r.data?.cs_user_id) || null,
+              scmUserId: (scm ?? r.data?.scm_user_id) || null,
             },
             () => notify("核验职责已保存并记录审计"),
           );
@@ -74,6 +78,8 @@ export function FulfillmentApprovers() {
               release ?? r.data?.release_user_id ?? "",
               setRelease,
             ],
+            ['客户关系确认人',cs ?? r.data?.cs_user_id ?? '',setCs],
+            ['供应链关闭审批人',scm ?? r.data?.scm_user_id ?? '',setScm],
           ] as const
         ).map(([label, value, set]) => (
           <Field label={label} key={label}>

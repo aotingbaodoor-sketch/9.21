@@ -4,6 +4,7 @@ import { useMutation, useResource } from "./api.ts";
 import { useSession } from "./context.tsx";
 import { ErrorBox, Loading, Field } from "./ui.tsx";
 import Settlement from './Settlement.tsx';
+import Completion from './Completion.tsx';
 
 type Item = {
   id: string;
@@ -51,7 +52,7 @@ function ChainList() {
         <h2>订单履约链</h2>
         <p>客户编号贯穿 · WO → PO → MO。旧订单与履约页面仍保留。</p>
         <p className="muted">
-          已开放工单、生产指令、物流凭证及FOB付款核验。节点须逐项核实；签收验收、变更与关闭仍待后续验收，不会自动标记完成。
+          已开放工单、生产指令、物流凭证、FOB付款核验及签收关闭。节点须逐项核实；未配置审批人或缺少凭证时不会自动通过。
         </p>
         <p>
           <Link to="/supply">原订单与履约</Link> ·{" "}
@@ -232,7 +233,7 @@ function ChainDetail({ id }: { id: string }) {
         <Link to="/supply">打开原订单页面开立采购订单</Link>
       </section>
       <section className="card">
-        <Settlement id={id} files={files} projectId={w.project_id}/>
+        <div id="settlement"><Settlement id={id} files={files} projectId={w.project_id}/></div>
         <h2>22态履约进度</h2>
         <p>尚未完成验收的后续节点保持待办，不自动推成“已完成”。</p>
         {user.role === "admin" &&
@@ -281,7 +282,7 @@ function ChainDetail({ id }: { id: string }) {
         </div>
       </section>
       <section className="card">
-        <h2>采购与生产指令</h2>
+        <h2 id="purchases">采购与生产指令</h2>
         {purchases.length === 0 ? (
           <p>暂无PO，请从已付定金的销售订单开立。</p>
         ) : (
@@ -316,7 +317,7 @@ function ChainDetail({ id }: { id: string }) {
         )}
       </section>
       <section className="card">
-        <h2>物流回传件（8类）</h2>
+        <h2 id="logistics">物流回传件（8类）</h2>
         <p>
           仅登记实际收到的文件；核对一致不等于已完成整条物流链。上传文件请到关联
           <Link to={`/quotations/${w.project_id}`}>报价项目附件</Link>。
@@ -387,6 +388,7 @@ function ChainDetail({ id }: { id: string }) {
         </div>
       </section>
       <section className="card">
+        <Completion order={w} files={files} logistics={logistics}/>
         <h2>客户通知草稿</h2>
         <p>系统不自动发送客户消息。</p>
         {notices.length ? (

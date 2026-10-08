@@ -93,6 +93,15 @@ const tables = [
   "shipment_package_items",
   "shipments",
   "shipment_package_allocations",
+  "crm_fulfillment_policy",
+  "crm_delivery_acceptance",
+  "crm_acceptance_records",
+  "crm_after_sales_cases",
+  "crm_after_sales_resolutions",
+  "crm_warranty_anchors",
+  "crm_delivery_visits",
+  "crm_order_close_confirmations",
+  "crm_work_order_close",
 ] as const;
 type Snapshot = {
   format: "autinberg-backup-v1";
@@ -144,7 +153,7 @@ export async function restore(
     )
       throw new Error("迁移版本与备份不一致，请使用对应版本代码恢复");
     for (const name of tables.filter(
-      (n) => !["settings","whatsapp_settings","quotation_settings","crm_document_class","crm_runtime_config","pricing_sync_config","crm_fulfillment_stage","crm_logistics_doc_type","crm_fulfillment_approvers"].includes(n),
+      (n) => !["settings","whatsapp_settings","quotation_settings","crm_document_class","crm_runtime_config","pricing_sync_config","crm_fulfillment_stage","crm_logistics_doc_type","crm_fulfillment_approvers","crm_fulfillment_policy"].includes(n),
     ))
       if ((await db.query(`SELECT 1 FROM ${name} LIMIT 1`)).rowCount)
         throw new Error(
@@ -168,7 +177,7 @@ export async function restore(
           throw new Error("备份字段无效");
         const seedKey = ['crm_document_class','crm_fulfillment_stage','crm_logistics_doc_type'].includes(name) ? 'code' : name === 'crm_runtime_config' ? 'key' : 'id';
         const onConflict =
-          ["settings","whatsapp_settings","quotation_settings","crm_document_class","crm_runtime_config","pricing_sync_config","crm_fulfillment_stage","crm_logistics_doc_type","crm_fulfillment_approvers"].includes(name)
+          ["settings","whatsapp_settings","quotation_settings","crm_document_class","crm_runtime_config","pricing_sync_config","crm_fulfillment_stage","crm_logistics_doc_type","crm_fulfillment_approvers","crm_fulfillment_policy"].includes(name)
             ? ` ON CONFLICT(${seedKey}) DO UPDATE SET ${keys
                 .filter((k) => k !== seedKey)
                 .map((k) => `"${k}"=EXCLUDED."${k}"`)
