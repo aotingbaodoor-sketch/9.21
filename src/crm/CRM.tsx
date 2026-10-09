@@ -34,6 +34,7 @@ import { QuoteAdmin } from "./QuoteAdmin.tsx";
 import './daily-prices.css';
 const DailyPrices=lazy(()=>import('./DailyPrices.tsx'));
 const Backups=lazy(()=>import('./Backups.tsx'));
+const Tariffs=lazy(()=>import('./Tariffs.tsx'));
 const OrderChain=lazy(()=>import('./OrderChain.tsx'));
 const ManufacturingView=lazy(()=>import('./OrderChain.tsx').then(m=>({default:m.ManufacturingView})));
 const DocumentClasses=lazy(()=>import('./Numbering.tsx').then(m=>({default:m.DocumentClasses})));
@@ -55,6 +56,7 @@ import { activeMenu, visibleMenu } from './navigation.ts';
 type Auth = { user: User; settings: Settings; csrf: string };
 function PricingAlertNotice(){const r=useResource<{count:number}>('/pricing/alerts/count',0,60000);return r.data?.count?<Link to="/daily-prices" role="status">价格同步异常（{r.data.count}）</Link>:null;}
 function BackupAlertNotice(){const r=useResource<{count:number}>('/backups/alerts/count',0,60000);return r.data?.count?<Link to="/settings/backups" role="status">备份异常（{r.data.count}）</Link>:null;}
+function TariffAlertNotice(){const r=useResource<{count:number}>('/tariffs/alerts/count',0,60000);return r.data?.count?<Link to="/tariffs" role="status">税率同步异常（{r.data.count}）</Link>:null;}
 export default function CRM() {
   return (
     <BrowserRouter>
@@ -193,6 +195,7 @@ function Root() {
               <WhatsAppBadge /></>}
               {user.role==='admin'&&<PricingAlertNotice/>}
               {user.role==='admin'&&<BackupAlertNotice/>}
+              {user.role==='admin'&&<TariffAlertNotice/>}
               {user.avatar ? (
                 <img className="avatar" src={user.avatar} alt={user.name} />
               ) : (
@@ -223,6 +226,7 @@ function Root() {
             <Route path="/master-data/numbering" element={<NumberingLedger/>}/>
             <Route path="/customers/:id/chain" element={<CustomerDocumentChain/>}/>
             <Route path="/daily-prices" element={<DailyPrices/>}/>
+            <Route path="/tariffs" element={<Tariffs/>}/>
             <Route path="/quotations/products" element={<QuoteAdmin mode="products" />} />
             <Route path="/quotations/freight" element={<QuoteAdmin mode="freight" />} />
             <Route path="/quotations/settings" element={<QuoteAdmin mode="settings" />} />

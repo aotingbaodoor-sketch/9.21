@@ -42,12 +42,13 @@ try {
  for(const [table,rows] of Object.entries(snapshot.tables) as [string,Record<string,unknown>[]][]){
   if(table==='schema_migrations')continue;
   // 020 adds exactly TC and metadata to class configuration; it never replaces historical codes.
-  const added=table==='crm_document_class'&&!rows.some(r=>r.code==='TC')?1:0;
+  const added=table==='crm_document_class'&&!rows.some(r=>r.code==='TC')?1:table==='automation_rule'&&!rows.some(r=>r.code==='tariff_sync')?1:0;
   assert.equal(Number((await pool.query(`SELECT count(*) n FROM ${quote(table)}`)).rows[0].n),rows.length+added,table);
   // Compare every original column after migration, not just row counts.
   if(rows.length){
    const cols=Object.keys(rows[0]);
-   const actual=(await pool.query(`SELECT row_to_json(t) AS row FROM (SELECT ${cols.map(quote).join(',')} FROM ${quote(table)}${table==='crm_document_class'&&added?" WHERE code<>'TC'":''}) t`)).rows.map(r=>r.row);
+   const filter=added?(table==='crm_document_class'?" WHERE code<>'TC'":" WHERE code<>'tariff_sync'"):'';
+   const actual=(await pool.query(`SELECT row_to_json(t) AS row FROM (SELECT ${cols.map(quote).join(',')} FROM ${quote(table)}${filter}) t`)).rows.map(r=>r.row);
    assert.equal(digest(actual),digest(rows),`Original columns changed: ${table}`);
   }
  }

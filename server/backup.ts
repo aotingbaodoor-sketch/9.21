@@ -104,6 +104,9 @@ const tables = [
   "crm_work_order_close",
   "automation_rule",
   "crm_backup_runs",
+  "tariff_source_registry",
+  "tariff_records",
+  "tariff_sync_runs",
 ] as const;
 type Snapshot = {
   format: "autinberg-backup-v1";

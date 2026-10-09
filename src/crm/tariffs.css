@@ -1,0 +1,51 @@
+.tariff-page table {
+  min-width: 1050px;
+}
+.tariff-page td {
+  vertical-align: top;
+  max-width: 330px;
+  overflow-wrap: anywhere;
+}
+.tariff-page details {
+  padding: 12px 0;
+  border-bottom: 1px solid #ddd;
+}
+.tariff-page summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.tariff-page .toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.tariff-check {
+  display: block;
+  margin: 12px 0;
+}
+.tariff-page input[type="checkbox"],
+.tariff-check input {
+  width: auto;
+  margin-right: 8px;
+}
+.tariff-page a {
+  overflow-wrap: anywhere;
+}
+.tariff-page form {
+  margin-top: 16px;
+}
+.tariff-line {
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+}
+.tariff-line label {
+  display: block;
+  margin: 8px 0;
+}
+.tariff-line input[type="checkbox"] {
+  width: auto;
+  margin-right: 8px;
+}

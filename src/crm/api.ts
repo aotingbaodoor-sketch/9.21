@@ -40,7 +40,7 @@ export async function api<T>(
   }
   return data;
 }
-export function useResource<T>(url: string, revision = 0, pollMs = 0) {
+export function useResource<T>(url: string, revision = 0, pollMs = 0, keepPrevious = false) {
   const [state, setState] = useState<{
     key: string;
     data: T | null;
@@ -74,7 +74,7 @@ export function useResource<T>(url: string, revision = 0, pollMs = 0) {
       if (interval) clearInterval(interval);
     };
   }, [url, key, pollMs]);
-  return state.key === key ? state : { data: null, error: "", loading: true };
+  return state.key === key ? state : { data: keepPrevious ? state.data : null, error: "", loading: true };
 }
 export function useMutation() {
   const [busy, setBusy] = useState(false),

@@ -1,0 +1,166 @@
+// Public, non-secret endpoint evidence captured 2026-10-09; real cloud runs override the status timestamps.
+export const sourceChecks: Record<
+  string,
+  {
+    checkedAt: string;
+    url: string;
+    status: number | null;
+    contentType: string | null;
+    error: string | null;
+    context: string;
+  }
+> = {
+  uk: {
+    checkedAt: "2026-10-09T08:14:09.432Z",
+    url: "https://www.trade-tariff.service.gov.uk/uk/api/commodities/7610100000",
+    status: 200,
+    contentType: "application/json; charset=utf-8",
+    error: null,
+    context: "本地网络核验；门户响应不是业务接通证明",
+  },
+  usitc: {
+    checkedAt: "2026-10-09T08:14:11.110Z",
+    url: "https://hts.usitc.gov/reststop/exportList?from=7610&to=7611&format=JSON&styles=false",
+    status: 200,
+    contentType: "application/octet-stream",
+    error: null,
+    context: "本地网络核验；门户响应不是业务接通证明",
+  },
+  uk_bulk: {
+    checkedAt: "2026-10-09T08:14:16.000Z",
+    url: "https://data.api.trade.gov.uk/v1/datasets/uk-tariff-2021-01-01/versions/latest/tables/commodities/data?format=csv",
+    status: 200,
+    contentType: "text/csv",
+    error: null,
+    context: "本地网络核验；门户响应不是业务接通证明",
+  },
+  wits: {
+    checkedAt: "2026-10-09T08:14:17.788Z",
+    url: "https://wits.worldbank.org/API/V1/SDMX/V21/datasource/TRN/reporter/840/partner/000/product/761010/year/2023/datatype/reported?format=JSON",
+    status: 200,
+    contentType:
+      "application/vnd.sdmx.data+json; version=1.0.0-wd; charset=utf-8",
+    error: null,
+    context: "本地网络核验；门户响应不是业务接通证明",
+  },
+  hsciq: {
+    checkedAt: "2026-10-09T08:14:17.928Z",
+    url: "https://www.hsciq.com/mcp",
+    status: 401,
+    contentType: "application/json; charset=utf-8",
+    error: null,
+    context: "本地网络核验；门户响应不是业务接通证明",
+  },
+  chinadata: {
+    checkedAt: "2026-10-09T08:14:20.312Z",
+    url: "https://chinadata.live/api/v1/tariffs?hs_code=76101000&origin_country=CN",
+    status: 403,
+    contentType: "text/html; charset=UTF-8",
+    error: null,
+    context: "本地网络核验；门户响应不是业务接通证明",
+  },
+  wto: {
+    checkedAt: "2026-10-09T08:14:21.026Z",
+    url: "https://tariffdata.wto.org/",
+    status: null,
+    contentType: null,
+    error: "fetch failed",
+    context: "本地网络核验；门户响应不是业务接通证明",
+  },
+  wto_tao: {
+    checkedAt: "2026-10-09T08:14:21.646Z",
+    url: "https://tao.wto.org/",
+    status: null,
+    contentType: null,
+    error: "fetch failed",
+    context: "本地网络核验；门户响应不是业务接通证明",
+  },
+  itc: {
+    checkedAt: "2026-10-09T08:14:22.636Z",
+    url: "https://www.macmap.org/",
+    status: 403,
+    contentType: "text/html; charset=UTF-8",
+    error: null,
+    context: "本地网络核验；门户响应不是业务接通证明",
+  },
+  singlewindow: {
+    checkedAt: "2026-10-09T08:14:22.856Z",
+    url: "https://www.singlewindow.cn/",
+    status: 200,
+    contentType: "text/html",
+    error: null,
+    context: "本地网络核验；门户响应不是业务接通证明",
+  },
+  zatca: {
+    checkedAt: "2026-10-09T08:14:33.494Z",
+    url: "https://zatca.gov.sa/",
+    status: null,
+    contentType: null,
+    error: "fetch failed",
+    context: "本地网络核验；门户响应不是业务接通证明",
+  },
+  uae: {
+    checkedAt: "2026-10-09T08:14:35.613Z",
+    url: "https://icp.gov.ae/",
+    status: 200,
+    contentType: "text/html; charset=UTF-8",
+    error: null,
+    context: "本地网络核验；门户响应不是业务接通证明",
+  },
+  dubai: {
+    checkedAt: "2026-10-09T08:14:43.272Z",
+    url: "https://www.dubaicustoms.gov.ae/",
+    status: 200,
+    contentType: "text/html; charset=utf-8",
+    error: null,
+    context: "本地网络核验；门户响应不是业务接通证明",
+  },
+  israel: {
+    checkedAt: "2026-10-09T08:14:45.021Z",
+    url: "https://www.gov.il/",
+    status: 403,
+    contentType: "text/html; charset=UTF-8",
+    error: null,
+    context: "本地网络核验；门户响应不是业务接通证明",
+  },
+  eaeu: {
+    checkedAt: "2026-10-09T08:14:47.726Z",
+    url: "https://eec.eaeunion.org/",
+    status: 200,
+    contentType: "text/html; charset=UTF-8",
+    error: null,
+    context: "本地网络核验；门户响应不是业务接通证明",
+  },
+  asean: {
+    checkedAt: "2026-10-09T08:14:52.667Z",
+    url: "https://tariff-finder.asean.org/",
+    status: 200,
+    contentType: "text/html",
+    error: null,
+    context: "本地网络核验；门户响应不是业务接通证明",
+  },
+  atr: {
+    checkedAt: "2026-10-09T08:14:54.999Z",
+    url: "https://atr.asean.org/",
+    status: 200,
+    contentType: "text/html; charset=UTF-8",
+    error: null,
+    context: "本地网络核验；门户响应不是业务接通证明",
+  },
+  fta: {
+    checkedAt: "2026-10-09T08:14:55.870Z",
+    url: "https://fta.mofcom.gov.cn/",
+    status: 200,
+    contentType: "text/html",
+    error: null,
+    context: "本地网络核验；门户响应不是业务接通证明",
+  },
+  customs: {
+    checkedAt: "2026-10-09T08:14:56.550Z",
+    url: "http://www.customs.gov.cn/",
+    status: 412,
+    contentType: "text/html; charset=utf-8",
+    error: null,
+    context: "本地网络核验；门户响应不是业务接通证明",
+  },
+};

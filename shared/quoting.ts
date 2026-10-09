@@ -1,4 +1,5 @@
 import { z } from "zod";
+import {isoCountry} from './tariffs.ts';
 import { dateSchema } from "./contracts.ts";
 import {provenanceSchema,freightLimitsSchema,type PriceBasis} from './pricing.ts';
 
@@ -55,6 +56,7 @@ export const freightSchema = z.object({
   fees: z.array(z.object({ kind: z.enum(feeKinds), basis: z.enum(["fixed", "cbm", "kg", "chargeableKg", "container"]), rate: money, minimum: money.default(0) })).max(40),
 }).refine(r => r.validFrom <= r.validUntil, "运价有效期无效");
 export const lineSchema = z.object({
+  tariffHsCode:z.string().regex(/^\d{8,12}$/).optional(),tariffRateIds:z.array(z.uuid()).max(20).optional(),
   key: z.string().min(1).max(80), productId: z.uuid(), location: text, floor: text, room: text, openingNumber: text,
   width: z.number().positive().max(100000), height: z.number().positive().max(100000), unit: z.enum(["mm", "cm", "m"]).default("mm"), quantity: z.number().int().min(1).max(10000),
   columns: z.number().int().min(1).max(8).default(2), rows: z.number().int().min(1).max(6).default(1),
@@ -63,6 +65,7 @@ export const lineSchema = z.object({
   special: text, notes: text, unitPrice: price, discountPct: percent.default(0), nonstandard: z.boolean().default(false),
 });
 export const quoteInputSchema = z.object({
+  tariff:z.object({destination:isoCountry,origin:isoCountry,applicableOn:z.iso.date(),calculationBasis:z.string().trim().min(10).max(3000)}).optional(),
   name: z.string().trim().min(1).max(150), country: z.string().trim().min(1).max(100), city: text, projectAddress: text, deliveryAddress: text, originPort: text, destinationPort: text,
   currency: z.string().regex(/^[A-Z]{3}$/), incoterm: z.enum(terms), namedPlace: text, targetDate: dateSchema, validUntil: dateSchema,
   freightId: z.uuid().nullable().default(null), freightMode: z.enum(["LCL", "FCL", "air", "courier", "rail", "truck", "other"]).default("LCL"), customerForwarder: z.boolean().default(false),
@@ -78,6 +81,6 @@ export type Freight = z.infer<typeof freightSchema> & { id: string; version: num
 export type Issue = { code: string; message: string; discipline: "admin" | "technical" | "logistics"; hard: boolean; line?: string };
 export type Packed = { packages: number; cbm: number; netKg: number; grossKg: number; widthMm: number; heightMm: number; depthMm: number; type: string; fragile: boolean; fumigation: boolean; stackable: boolean };
 export type CalculatedLine = { key: string; sku: string; nameZh: string; nameEn: string; widthMm: number; heightMm: number; area: number; billedArea: number; quantity: number; unitPrice: number; productTotal: number; packingTotal: number; packed: Packed; svg: string; specs: Record<string, string>; options: string[]; location: string; special: string; private: { cost: number; minimum: number; marginPct: number; product: Product } };
-export type Calculation = { priceBasis?:PriceBasis; lines: CalculatedLine[]; issues: Issue[]; currency: string; productTotal: number; packingTotal: number; freightTotal: number | null; total: number | null; packages: number; cbm: number; netKg: number; grossKg: number; containers: string[]; validThrough: string; private: { costCny: number; marginPct: number | null; freightCostCny: number | null; freight: Freight | null; settings: QuotationSettings; fx: unknown; policy: QuotePolicy } };
+export type Calculation = { tariffBasis?:{required:boolean;records:import('./tariffs.ts').TariffRecord[];errors:string[];context?:QuoteInput['tariff']}; priceBasis?:PriceBasis; lines: CalculatedLine[]; issues: Issue[]; currency: string; productTotal: number; packingTotal: number; freightTotal: number | null; total: number | null; packages: number; cbm: number; netKg: number; grossKg: number; containers: string[]; validThrough: string; private: { costCny: number; marginPct: number | null; freightCostCny: number | null; freight: Freight | null; settings: QuotationSettings; fx: unknown; policy: QuotePolicy } };
 export type PublicCalculation = Omit<Calculation, "private" | "lines"> & { lines: Omit<CalculatedLine, "private">[]; costs?: { costCny: number; marginPct: number | null }; freightCosts?: { freightCostCny: number | null }; lineCosts?: { cost: number; minimum: number; marginPct: number }[] };
 export const specLabels: Record<string, string> = { profile: "型材 / Profile", thickness: "型材厚度 / Profile thickness", finish: "表面工艺 / Finish", color: "颜色 / Color", glass: "玻璃 / Glass", glassThickness: "玻璃厚度 / Glass thickness", cavity: "中空层 / Cavity", hardwareBrand: "五金品牌 / Hardware brand", hardwareModel: "五金型号 / Hardware model", lock: "锁具 / Lock", hinge: "合页 / Hinge", screen: "纱网 / Screen", trim: "门套 / Trim", wallThickness: "墙厚 / Wall thickness", moisture: "防潮 / Moisture", termite: "防蚁 / Termite", acoustic: "隔音 / Acoustic", fire: "防火 / Fire" };

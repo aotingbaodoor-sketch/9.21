@@ -48,6 +48,7 @@ export const MENU: readonly MenuNode[] = [
   ] },
   { id: 'scm', label: '3 供应链管理部 SCM', children: [
     link('freight', '物流与货代', '/quotations/freight', ['admin', 'logistics']),
+    link('tariffs', '海关税率与来源', '/tariffs', ['admin', 'sales', 'logistics'],{businessOwner:'SCM物流与货代'}),
     link('supply', '订单与履约', '/supply', ['admin', 'sales', 'technical', 'logistics']),
     link('order-chain', '订单履约链（WO / PO / MO）', '/supply/chain', ['admin','sales','technical','logistics','coordinator']),
     link('factories', '供应商与工厂合作', '/supply/factories', ['admin']),

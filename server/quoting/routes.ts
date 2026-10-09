@@ -16,6 +16,7 @@ import type { QuoteRow } from "./types.ts";
 import { receiveQuoteDeposit,openPaidSalesOrder } from './deposit.ts';
 import { issueCustomerQuote, requireQuoteCustomer } from './customer-lifecycle.ts';
 import {effectiveSettings} from '../pricing/sync.ts';
+import {tariffBasis,assertTariffBasis} from '../tariffs/quotation.ts';
 
 type Mutate = (req: Request, res: Response, run: (db: pg.PoolClient) => Promise<unknown>) => Promise<void>;
 type Project = { id: string; customer_id: string; name: string; version: number; company: string; owner_id: string };
@@ -52,6 +53,9 @@ async function compute(db: Db, actor: User, p: Project, input: QuoteInput) {
   const crm = await repo.settings(db);
   const c = calculate(input, products.rows.map(r => ({ ...r.data, id: r.id, version: r.version })) as Product[], rates.rows[0] ? { ...rates.rows[0].data, id: rates.rows[0].id, version: rates.rows[0].version } as Freight : null, settings, policy(settings, actor), businessDay(crm.timezone), p.id);
   c.priceBasis={settingsVersion:stored.version,fx:Object.fromEntries([...new Set([input.currency,rates.rows[0]?.data.currency].filter((v):v is string=>!!v&&v!=='CNY'))].sort().map(v=>[v,settings.fx[v]??null])),productVersions:Object.fromEntries(products.rows.map(r=>[r.id,r.version])),freightVersion:rates.rows[0]?.version??null,fxBatchId:state.data.mode==='ecb_reference'?batch?.id??null:null,policyVersion:state.version};
+  c.tariffBasis=await tariffBasis(db,input);
+  for(const message of c.tariffBasis.errors)c.issues.push({code:'G-37',message,discipline:'logistics',hard:true});
+  if(c.tariffBasis.errors.length)c.total=null;
   return c;
 }
 async function priceChanges(db:Db,q:QuoteRow):Promise<string[]> {
@@ -199,6 +203,7 @@ export function registerQuoting(app: Express, pool: pg.Pool, mutate: Mutate) {
   }));
   app.post("/api/quoting/versions/:id/issue", async (req, res) => mutate(req, res, async db => {
     const { q, p } = await quote(db, req.actor, id(req), true); repo.checkVersion(q, req.body.version);
+    await assertTariffBasis(db,q.input,q.snapshot.tariffBasis);
     const changed=await priceChanges(db,q);if(changed.length)throw new HttpError(409,changed.join('；')+'。请重新核算并审批新版本');
     const today = businessDay((await repo.settings(db)).timezone);
     if (q.status !== "approved" || q.snapshot.issues.some(i => i.hard) || q.snapshot.total === null || q.snapshot.validThrough < today) throw new HttpError(422, "报价未通过全部审核、缺少数据或已过期");
