@@ -55,6 +55,9 @@ export function calculate(input: QuoteInput, products: Product[], freight: Freig
     const selected = p.options.filter(o => line.options.includes(o.id));
     if (new Set(line.options).size !== line.options.length || selected.length !== line.options.length || p.options.some(o => o.required && !line.options.includes(o.id))) issue("options", `${p.sku} 配置选项无效或缺少必选项`, "admin", true, line.key);
     for (const o of selected) {
+      if(o.commercialReview)issue('option-review',`${p.sku}/${o.nameZh} 新选装价须商务核价审批`,'admin',false,line.key);
+      if(o.source&&(o.source.validFrom>today||o.source.validUntil<input.validUntil||o.source.validUntil<today))issue('G-32',`${p.sku}/${o.nameZh}选装价格有效期不足`,'admin',true,line.key);
+      if(o.material?.fx){const current=settings.fx[o.material.currency];if(!current||current.cnyPerUnit!==o.material.cnyPerUnit||current.validUntil<o.material.validUntil)issue('G-36',`${p.sku}/${o.nameZh}物料换算汇率已变化，请重新关联`,'admin',true,line.key);}
       if (o.cost === null || o.sale === null) issue("option-price", `${p.sku}/${o.nameZh} 未核价`, "admin", true, line.key);
       cost = cost.plus(bases[o.basis].mul(o.cost || 0)); sale = sale.plus(bases[o.basis].mul(o.sale || 0)); minimum = minimum.plus(bases[o.basis].mul(o.cost || 0));
     }

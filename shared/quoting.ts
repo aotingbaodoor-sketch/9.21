@@ -2,6 +2,7 @@ import { z } from "zod";
 import {isoCountry} from './tariffs.ts';
 import { dateSchema } from "./contracts.ts";
 import {logisticsInputSchema,logisticsPolicySchema,type LogisticsSnapshot} from './logistics.ts';
+import {materialReference,costSource} from './materials.ts';
 import {provenanceSchema,freightLimitsSchema,type PriceBasis} from './pricing.ts';
 
 const text = z.string().trim().max(2000).default("");
@@ -13,7 +14,7 @@ export const terms = ["EXW", "FCA", "FOB", "CFR", "CIF", "DAP", "DDP"] as const;
 export const methods = ["area", "unit", "set", "linear", "piece", "fixed", "area_options", "range", "material", "composite"] as const;
 export const basis = ["area", "width", "height", "perimeter", "one"] as const;
 export const feeKinds = ["domestic", "export", "international", "insurance", "destination", "customs", "duty", "delivery", "other"] as const;
-export const optionSchema = z.object({ id: z.string().min(1).max(80), group: text, nameZh: text, nameEn: text, basis: z.enum(basis).default("one"), cost: price, sale: price, required: z.boolean().default(false) });
+export const optionSchema = z.object({ id: z.string().min(1).max(80), group: text, nameZh: text, nameEn: text, basis: z.enum(basis).default("one"), cost: price, sale: price, required: z.boolean().default(false), material:materialReference.optional(),source:costSource.optional(),commercialReview:z.boolean().default(false) });
 export const packingSchema = z.object({
   configured: z.boolean().default(false), type: text, widthAllowanceMm: money.default(0), heightAllowanceMm: money.default(0), depthMm: money.default(0),
   unitsPerPackage: z.number().int().min(1).max(100).default(1), kgPerSqm: price, fixedKg: price, tareKg: price, costPerPackage: price, salePerPackage: price,

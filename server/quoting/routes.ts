@@ -19,6 +19,7 @@ import {effectiveSettings} from '../pricing/sync.ts';
 import {tariffBasis,assertTariffBasis} from '../tariffs/quotation.ts';
 import {applyLogistics} from '../logistics/engine.ts';
 import {loadCostRates,logisticsChanges} from '../logistics/routes.ts';
+import {materialChanges} from '../logistics/materials.ts';
 
 type Mutate = (req: Request, res: Response, run: (db: pg.PoolClient) => Promise<unknown>) => Promise<void>;
 type Project = { id: string; customer_id: string; name: string; version: number; company: string; owner_id: string };
@@ -60,9 +61,13 @@ async function compute(db: Db, actor: User, p: Project, input: QuoteInput) {
   c.priceBasis={settingsVersion:stored.version,fx:Object.fromEntries([...new Set([input.currency,rates.rows[0]?.data.currency].filter((v):v is string=>!!v&&v!=='CNY'))].sort().map(v=>[v,settings.fx[v]??null])),productVersions:Object.fromEntries(products.rows.map(r=>[r.id,r.version])),freightVersion:rates.rows[0]?.version??null,fxBatchId:state.data.mode==='ecb_reference'?batch?.id??null:null,policyVersion:state.version};
   c.tariffBasis=await tariffBasis(db,input);
   applyLogistics(c,input,await loadCostRates(db,input.logistics?.rateIds??[]),settings,businessDay(crm.timezone));
+  const usedProducts=products.rows.map(r=>({...r.data,id:r.id,version:r.version,options:r.data.options.filter((o:any)=>input.lines.some(l=>l.productId===r.id&&l.options.includes(o.id)))}));
+  const materials=await materialChanges(db,usedProducts,[input.validUntil,input.targetDate].sort().at(-1)!);
+  for(const message of materials)c.issues.push({code:'G-36',message,discipline:'admin',hard:true});
+  for(const r of usedProducts)for(const o of r.options)if(o.material?.fx)c.priceBasis.fx[o.material.currency]=o.material.fx;
   Object.assign(c.priceBasis.fx,c.private.logistics?.fx??{});
   for(const message of c.tariffBasis.errors)c.issues.push({code:'G-37',message,discipline:'logistics',hard:true});
-  if(c.tariffBasis.errors.length)c.total=null;
+  if(c.tariffBasis.errors.length||materials.length)c.total=null;
   return c;
 }
 async function priceChanges(db:Db,q:QuoteRow):Promise<string[]> {
@@ -70,6 +75,7 @@ async function priceChanges(db:Db,q:QuoteRow):Promise<string[]> {
   const b=q.snapshot.priceBasis;if(!b)return ['旧版草稿缺少价格版本依据，请另存新版本重新核算'];
   const stored=await getQuoteSettings(db),{settings}=await effectiveSettings(db,stored.data),changes:string[]=[];
   changes.push(...await logisticsChanges(db,q.snapshot.private.logistics));
+  changes.push(...await materialChanges(db,q.snapshot.lines.map(l=>({...l.private.product,options:l.private.product.options.filter(o=>q.input.lines.find(i=>i.key===l.key)?.options.includes(o.id))})),[q.input.validUntil,q.input.targetDate].sort().at(-1)!,true));
   if(stored.version!==b.settingsVersion)changes.push('公司报价规则已变更');
   for(const [currency,previous] of Object.entries(b.fx))if(JSON.stringify(previous&&Object.entries(previous as object).sort())!==JSON.stringify(settings.fx[currency]&&Object.entries(settings.fx[currency]).sort()))changes.push(`${currency}报价汇率或有效期已变化`);
   for(const [id,version] of Object.entries(b.productVersions)){const row=(await db.query('SELECT version,data FROM quotation_products WHERE id=$1',[id])).rows[0];if(!row||!row.data.active||row.version!==version)changes.push('产品价格或规格已变化');}
@@ -89,7 +95,7 @@ async function fileAccess(db: Db, actor: User, projectId: string, taskId?: strin
 function productView(p: Product) {
   const { prices: _prices, formula: _formula, bands: _bands, packing, options, provenance:_provenance,...publicData } = p;
   const { costPerPackage: _cost, kgPerSqm: _kg, fixedKg: _fixed, tareKg: _tare, ...packingPublic } = packing;
-  return { ...publicData, packing: packingPublic, options: options.map(({ cost: _optionCost, ...o }) => o) };
+  return { ...publicData, packing: packingPublic, options: options.map(({ cost: _optionCost, material:_material,source:_source,commercialReview:_review,...o }) => o) };
 }
 export function registerQuoting(app: Express, pool: pg.Pool, mutate: Mutate) {
   app.get("/api/quoting/settings", async (req, res) => {

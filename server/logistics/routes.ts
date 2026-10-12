@@ -14,6 +14,9 @@ import {
 import { readImport } from "../pricing/imports.ts";
 import { productSchema } from "../../shared/quoting.ts";
 import ExcelJS from "exceljs";
+import {expiryConfig} from './expiry.ts';
+import {nextRun} from '../pricing/sync.ts';
+import {registerMaterials} from './materials.ts';
 type Mutate = (
   req: Request,
   res: Response,
@@ -155,6 +158,7 @@ const headers = [
   "适用说明",
 ];
 export function registerLogistics(app: Express, pool: pg.Pool, mutate: Mutate) {
+  registerMaterials(app,pool,mutate);
   app.use("/api/logistics", (req, _res, next) => {
     if (
       !["admin", "coordinator", "logistics", "sales"].includes(req.actor.role)
@@ -162,6 +166,25 @@ export function registerLogistics(app: Express, pool: pg.Pool, mutate: Mutate) {
       throw new HttpError(403, "无物流计价权限");
     next();
   });
+  app.get('/api/logistics/expiry',async(req,res)=>{
+    maintain(req.actor.role);
+    const rule=(await pool.query("SELECT enabled,config,version,next_run,last_success,last_error,last_heartbeat FROM automation_rule WHERE code='logistics_expiry'")).rows[0];
+    const alerts=(await pool.query('SELECT entity,entity_id,version,state,name,valid_until::text,created_at,checked_at FROM logistics_expiry_alerts WHERE resolved_at IS NULL ORDER BY valid_until NULLS FIRST LIMIT 500')).rows;
+    const runs=(await pool.query('SELECT * FROM logistics_expiry_runs ORDER BY started_at DESC LIMIT 10')).rows;
+    res.json({rule,alerts,runs});
+  });
+  app.put('/api/logistics/expiry',async(req,res)=>mutate(req,res,async db=>{
+    requireAdmin(req.actor);
+    const i=z.object({config:expiryConfig,version:z.number().int(),enabled:z.boolean()}).parse(req.body);
+    const r=await db.query("UPDATE automation_rule SET config=$1,enabled=$2,version=version+1,next_run=$3,updated_by=$4,updated_at=now() WHERE code='logistics_expiry' AND version=$5 RETURNING version",[JSON.stringify(i.config),i.enabled,nextRun([i.config.time]),req.actor.id,i.version]);
+    if(!r.rowCount)throw new HttpError(409,'任务设置已更新，请刷新');
+    await audit(db,req.actor,'修改成本费率到期检查','logistics_expiry',i);return r.rows[0];
+  }));
+  app.post('/api/logistics/expiry/check',async(req,res)=>mutate(req,res,async db=>{
+    requireAdmin(req.actor);
+    await db.query("UPDATE automation_rule SET next_run=now(),requested_by=$1 WHERE code='logistics_expiry'",[req.actor.id]);
+    await audit(db,req.actor,'请求成本费率到期检查','logistics_expiry');return {queued:true};
+  }));
   app.get("/api/logistics/rates", async (req, res) => {
     const data = (
         await pool.query(
@@ -393,7 +416,7 @@ export function registerLogistics(app: Express, pool: pg.Pool, mutate: Mutate) {
       maintain(req.actor.role);
       const r = (
         await db.query(
-          "SELECT * FROM logistics_imports WHERE id=$1 AND (created_by=$2 OR $3='admin') FOR UPDATE",
+          "SELECT * FROM logistics_imports WHERE id=$1 AND kind='rates' AND (created_by=$2 OR $3='admin') FOR UPDATE",
           [z.uuid().parse(req.params.id), req.actor.id, req.actor.role],
         )
       ).rows[0];
@@ -498,11 +521,13 @@ export function registerLogistics(app: Express, pool: pg.Pool, mutate: Mutate) {
           422,
           "配置选项已变化，请刷新；本入口不能删除或复制配置",
         );
+      if(i.options?.some(v=>r.data.options.some((o:any)=>o.id===v.id&&o.material&&o.cost!==v.cost)))throw new HttpError(422,'已关联物料的选装成本须在物料关联入口重新核对，不能直接覆盖');
       const data = productSchema.parse({
         ...r.data,
         options: r.data.options.map((o: any) => ({
           ...o,
           ...i.options?.find((v) => v.id === o.id),
+          ...(o.material?{cost:o.cost}:{}),
         })),
         prices: {
           ...r.data.prices,

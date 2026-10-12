@@ -46,7 +46,7 @@ export async function approveImport(db:Db,importId:string,userId:string,note:str
    const prior=(await db.query('SELECT * FROM quotation_products WHERE sku=$1 FOR UPDATE',[sku])).rows[0];
    const sale=num(row,'销售指导价CNY');if(sale===null)throw new HttpError(422,`${sku}缺少核准销售价；供应商底价不能自动充当销售价`);
    const data=productSchema.parse({...prior?.data,sku,nameZh:str(row,'中文名称')||prior?.data.nameZh,nameEn:str(row,'英文名称')||prior?.data.nameEn,category:str(row,'类别')||prior?.data.category,series:str(row,'系列')||prior?.data.series,pricing:str(row,'计价方式')||prior?.data.pricing,
-    prices:{...prior?.data.prices,guide:sale,...(num(row,'工厂底价CNY')!==null?{factory:num(row,'工厂底价CNY')}:{}) ,...(num(row,'最低销售价CNY')!==null?{minimum:num(row,'最低销售价CNY')}:{})},
+    prices:{...prior?.data.prices,guide:sale,...(num(row,'工厂底价CNY')!==null?{factory:num(row,'工厂底价CNY'),internal:num(row,'工厂底价CNY')}:{}) ,...(num(row,'最低销售价CNY')!==null?{minimum:num(row,'最低销售价CNY')}:{})},
     standardSpecs:{...prior?.data.standardSpecs,...Object.fromEntries([['型材','profile'],['五金','hardwareModel'],['玻璃','glass'],['颜色','color']].filter(([cn])=>str(row,cn)).map(([cn,en])=>[en,str(row,cn)]))},
     packing:{...prior?.data.packing,...(str(row,'包装说明')?{type:str(row,'包装说明')}:{})},
     ...Object.fromEntries([['最小宽mm','minWidthMm'],['最大宽mm','maxWidthMm'],['最小高mm','minHeightMm'],['最大高mm','maxHeightMm']].filter(([cn])=>num(row,cn)!==null).map(([cn,en])=>[en,num(row,cn)])),priceValidUntil:record.valid_until,provenance});

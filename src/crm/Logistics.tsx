@@ -10,6 +10,7 @@ import {
   type CostRate,
 } from "../../shared/logistics.ts";
 import type { Product } from "../../shared/quoting.ts";
+import {MaterialCosts} from './MaterialCosts.tsx';
 const encoded = async (file: File) => {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let str = "";
@@ -44,12 +45,14 @@ export default function Logistics() {
         </p>
         <div className="toolbar">
           <button onClick={() => setTab("rates")}>杂费、保险及税费公式</button>
+          {canMaintain && <button onClick={()=>setTab('expiry')}>到期提醒与后台检查</button>}
           {canCost && (
             <>
               <button onClick={() => setTab("products")}>
                 产品采购成本 / 配置选装
               </button>
               <button onClick={() => setTab("policy")}>底线政策</button>
+              <button onClick={()=>setTab('materials')}>物料成本与选装导入</button>
             </>
           )}
         </div>
@@ -162,8 +165,29 @@ export default function Logistics() {
       )}
       {tab === "products" && canCost && <ProductCosts />}
       {tab === "policy" && canCost && <Policy />}
+      {tab === 'expiry' && canMaintain && <Expiry />}
+      {tab === 'materials' && canCost && <MaterialCosts />}
     </>
   );
+}
+function Expiry(){
+  const {user,revision,refresh,notify}=useSession(),m=useMutation();
+  type State={rule:{enabled:boolean;version:number;config:{time:string;timezone:'Asia/Shanghai';warningDays:number};next_run:string;last_success:string|null;last_error:string|null;last_heartbeat:string|null};alerts:{entity:string;entity_id:string;version:number;state:string;name:string;valid_until:string|null;checked_at:string}[];runs:{id:string;status:string;started_at:string;alert_count:number|null;error:string|null}[]};
+  const r=useResource<State>('/logistics/expiry',revision);
+  if(r.loading)return <Loading/>;
+  if(!r.data)return <ErrorBox message={r.error}/>;
+  const {rule,alerts,runs}=r.data;
+  return <Panel title="成本与费率到期提醒（云端运行）"><p>只生成内部提醒，不延长有效期、不修改原价格、不发送客户消息。关闭电脑后仍执行。</p>
+    <p>最近成功：{rule.last_success?new Date(rule.last_success).toLocaleString():'尚未成功运行'}；下次：{new Date(rule.next_run).toLocaleString()}（北京时间）；状态：{rule.enabled?'已启用':'已停用'}</p>
+    <ErrorBox message={rule.last_error||m.error}/>
+    {user.role==='admin'&&<form key={rule.version} onSubmit={ev=>{ev.preventDefault();const f=new FormData(ev.currentTarget);void m.run('/logistics/expiry','PUT',{version:rule.version,enabled:f.get('enabled')==='on',config:{time:String(f.get('time')),warningDays:Number(f.get('days')),timezone:'Asia/Shanghai'}},()=>{refresh();notify('后台检查设置已保存');});}}>
+      <div className="form-grid"><Field label="每日检查时间（北京时间）"><input type="time" name="time" required defaultValue={rule.config.time}/></Field><Field label="提前提醒天数"><input type="number" name="days" min={0} max={90} required defaultValue={rule.config.warningDays}/></Field><label><input type="checkbox" name="enabled" defaultChecked={rule.enabled}/>启用服务器到期检查</label></div>
+      <button disabled={m.busy}>保存检查设置</button> <button type="button" disabled={m.busy} onClick={()=>void m.run('/logistics/expiry/check','POST',{},()=>{refresh();notify('已排队，服务器将在一分钟内检查');})}>立即检查</button>
+    </form>}
+    <div className="price-table"><table><thead><tr><th>记录</th><th>版本</th><th>有效至</th><th>状态</th><th>最近检查</th></tr></thead><tbody>{alerts.map(a=><tr key={`${a.entity}:${a.entity_id}:${a.version}:${a.state}`}><td>{a.name}（{a.entity==='product'?'产品':a.entity==='freight'?'航线':'杂费/保险'}）</td><td>V{a.version}</td><td>{a.valid_until??'缺少有效期'}</td><td>{{due:'即将到期',expired:'已过期',missing:'待补有效期'}[a.state]}</td><td>{new Date(a.checked_at).toLocaleString()}</td></tr>)}</tbody></table></div>
+    {!alerts.length&&<p>{rule.last_success?'最近一次检查无到期提醒；不代表空白产品或费用已配置。':'尚无成功检查记录，不能判断无到期项。'}</p>}
+    <h3>实际运行记录</h3>{runs.map(run=><p key={run.id}>{new Date(run.started_at).toLocaleString()} · {run.status==='success'?`完成，${run.alert_count}条提醒`:run.error}</p>)}
+  </Panel>;
 }
 function RateForm({
   rate,
@@ -757,6 +781,7 @@ function ProductCostForm({
               min="0"
               step="any"
               defaultValue={o.cost ?? ""}
+              readOnly={!!o.material}
             />
           </Field>
           <Field label="选装销售升级费 CNY">

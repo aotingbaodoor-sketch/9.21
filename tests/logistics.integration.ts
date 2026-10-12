@@ -23,6 +23,7 @@ import {
   parseFxBackup,
 } from "../server/pricing/sync.ts";
 import { ensureSources } from "../server/tariffs/sources.ts";
+import {createLogisticsExpiryWorker} from '../server/logistics/expiry.ts';
 const root = mkdtempSync(path.join(os.tmpdir(), "autinberg-logistics-")),
   password = randomBytes(24).toString("hex"),
   origin = "http://127.0.0.1:4632";
@@ -444,6 +445,36 @@ try {
     422,
   );
   pass("底线系数即时生效和乐观锁、CSV错误行预览、原文件留存、确认幂等导入");
+  const supplier=randomUUID();await pool.query('INSERT INTO factories(id,name) VALUES($1,$2)',[supplier,'ISOLATED MAT FACTORY']);
+  const matData={factoryId:supplier,supplierCode:'TEST-PART',name:'测试五金',specification:'TEST isolated specification',unit:'piece',currency:'CNY',cost:20,sourceDate:today,validFrom:today,validUntil:future,provider:'ISOLATED MAT FACTORY',evidence:'https://example.invalid/material-proof'};
+  assert.equal((await req(sales,'/logistics/materials')).status,403);
+  assert.equal((await req(logistics,'/logistics/materials')).status,403);
+  const mat=await ok(coordinator,'/logistics/materials',{data:matData,reason:'TEST real API material fixture'});
+  assert.equal((await ok(coordinator,'/logistics/materials',{data:matData,reason:'TEST repeat no duplicate'})).id,mat.id);
+  const materialProduct=(await ok(admin,'/quoting/products',{...f.product,sku:'TEST-MATERIAL',options:[]})).id;
+  const optionCsv=`产品型号,选装ID,配置组,中文名称,英文名称,计价基准,成本CNY,销售加价CNY,必选,来源日期,生效日期,失效日期,提供方,凭证链接,变更原因\r\nTEST-MATERIAL,hardware,五金,测试五金,TEST hardware,one,20,80,false,${today},${today},${future},TEST supplier,https://example.invalid/options,TEST option cost import\r\n`;
+  const optionPreview=await ok(coordinator,'/logistics/cost-import-preview',{kind:'options',name:'options.csv',data:Buffer.from(optionCsv).toString('base64')});assert.deepEqual(optionPreview.rows[0].errors,[]);
+  assert.equal((await req(logistics,`/logistics/imports/${optionPreview.id}/commit`,{})).status,404);
+  await ok(coordinator,`/logistics/cost-imports/${optionPreview.id}/commit`,{});
+  assert.equal((await ok(coordinator,`/logistics/cost-imports/${optionPreview.id}/commit`,{})).alreadyCommitted,true);
+  const mProduct=(await ok(coordinator,'/logistics/products')).find((p:any)=>p.id===materialProduct);
+  await ok(coordinator,'/logistics/material-link',{productId:materialProduct,version:mProduct.version,optionId:'hardware',materialId:mat.id,coefficient:2,reason:'TEST 2 pieces per finished piece'});
+  const linked=(await ok(coordinator,'/logistics/products')).find((p:any)=>p.id===materialProduct);
+  assert.equal(linked.data.options[0].cost,40);assert.equal(linked.data.options[0].sale,80);assert.equal(linked.data.options[0].material.version,1);
+  const salesProducts=await ok(sales,'/quoting/products');assert.ok(!JSON.stringify(salesProducts).includes('material-proof'));assert.ok(!JSON.stringify(salesProducts).includes('cnyPerUnit'));
+  const materialInput=structuredClone(f.input);materialInput.incoterm='EXW';materialInput.customerForwarder=true;materialInput.logistics!.rateIds=[];materialInput.lines[0].productId=materialProduct;materialInput.lines[0].options=['hardware'];
+  const mCalc=await ok(admin,`/quoting/projects/${project}/preview`,materialInput);assert.ok(mCalc.total>0);assert.ok(mCalc.issues.some((i:any)=>i.code==='option-review'));
+  assert.equal(mCalc.costs.costCny,3300,'Material cost replaces a component, quantity applied exactly once');
+  await ok(coordinator,'/logistics/materials',{data:{...matData,cost:21},previousId:mat.id,reason:'TEST supplier price revision'});
+  const mStale=await ok(admin,`/quoting/projects/${project}/preview`,materialInput);assert.equal(mStale.total,null);assert.ok(mStale.issues.some((i:any)=>i.code==='G-36'));
+  const noOptional=structuredClone(materialInput);noOptional.lines[0].options=[];assert.ok((await ok(admin,`/quoting/projects/${project}/preview`,noOptional)).total>0,'Unused optional material must not block standard products');
+  assert.equal((await ok(coordinator,`/logistics/materials/${mat.id}/history`)).length,2);
+  await assert.rejects(pool.query("UPDATE logistics_materials SET data='{}' WHERE id=$1",[mat.id]));
+  assert.equal(JSON.stringify((await pool.query('SELECT snapshot FROM quotation_versions WHERE id=$1',[v.id])).rows[0].snapshot),snapshot);
+  const matCsv=`供应商名称,供应商物料码,名称,规格,单位,币种,采购单价,来源日期,生效日期,失效日期,提供方,凭证链接,变更原因\r\nISOLATED MAT FACTORY,TEST-SECOND,测试配件,TEST规格,piece,CNY,5,${today},${today},${future},TEST supplier,https://example.invalid/material,TEST material CSV import\r\n`;
+  const matPreview=await ok(coordinator,'/logistics/cost-import-preview',{kind:'materials',name:'materials.csv',data:Buffer.from(matCsv).toString('base64')});assert.deepEqual(matPreview.rows[0].errors,[]);await ok(coordinator,`/logistics/cost-imports/${matPreview.id}/commit`,{});
+  const badMaterial=await ok(coordinator,'/logistics/cost-import-preview',{kind:'materials',name:'materials.csv',data:Buffer.from(matCsv.replace(',5,',',,')).toString('base64')});assert.ok(badMaterial.rows[0].errors.length);assert.equal((await req(coordinator,`/logistics/cost-imports/${badMaterial.id}/commit`,{})).status,422);
+  pass('物料/选装真实API：供应商关联、批量预览及错误行、重复提交、成本不重复相加、商务审批、升版G36、销售脱敏、历史QT不变');
   const data = Array.from({ length: 22 }, (_, i) => ({
     date: today,
     base: "EUR",
@@ -619,9 +650,30 @@ try {
   pass(
     "EXW真实开单链：QT→确认→定金门禁→SO→WO；22态保留，n/a原因/人/时间，历史术语不可改，顺序跳过不适用节点",
   );
+  assert.equal((await req(sales,'/logistics/expiry')).status,403);
+  assert.equal((await req(coordinator,'/logistics/expiry/check',{})).status,403);
+  const expiryRate=await ok(coordinator,'/logistics/rates',{data:{...rate,name:'TEST due rate',validUntil:today},reason:'TEST expiry source'});
+  const expiryWorker=createLogisticsExpiryWorker(pool);
+  await expiryWorker.tick();
+  let expiry=await ok(coordinator,'/logistics/expiry');
+  assert.equal(expiry.alerts.find((a:any)=>a.entity_id===expiryRate.id)?.state,'due');
+  const alertCount=expiry.alerts.length;
+  await ok(admin,'/logistics/expiry/check',{});await expiryWorker.tick();
+  assert.equal((await ok(coordinator,'/logistics/expiry')).alerts.length,alertCount);
+  await pool.query("UPDATE automation_rule SET config=jsonb_set(config,'{time}','\"invalid\"'),next_run=now() WHERE code='logistics_expiry'");
+  await expiryWorker.tick();
+  expiry=await ok(coordinator,'/logistics/expiry');
+  assert.equal(expiry.alerts.length,alertCount);assert.equal(expiry.runs[0].status,'failed');assert.ok(expiry.rule.last_error);
+  assert.equal((await pool.query('SELECT data FROM logistics_cost_rates WHERE id=$1',[expiryRate.id])).rows[0].data.validUntil,today);
+  await ok(admin,'/logistics/expiry',{version:expiry.rule.version,enabled:true,config:{time:'07:30',timezone:'Asia/Shanghai',warningDays:7}},'PUT');
+  await ok(coordinator,`/logistics/rates/${expiryRate.id}/version`,{data:{...rate,name:'TEST due rate',validUntil:future},reason:'TEST actual renewal'});
+  await ok(admin,'/logistics/expiry/check',{});await expiryWorker.tick();
+  expiry=await ok(coordinator,'/logistics/expiry');assert.ok(!expiry.alerts.some((a:any)=>a.entity_id===expiryRate.id));
+  pass('云端到期任务：岗位隔离、重复执行去重、失败保留旧提醒/旧费率、15分钟重试、真实升版后解除提醒');
   const archive = await backup(pool);
   const restored = await restore(target, archive);
   assert.equal(restored.logistics_quote_sheets, 3);
+  assert.ok(restored.logistics_expiry_runs>=4);
   assert.equal(
     (
       await target.query(
@@ -672,6 +724,14 @@ try {
         .click();
       await page.getByLabel("选择维护成本的产品").selectOption(f.product.id);
       await page.getByLabel("P-COST 实际采购成本").waitFor();
+      await page.getByRole('button',{name:'物料成本与选装导入',exact:true}).click();
+      await page.getByRole('heading',{name:'MAT物料成本与供应商报价',exact:true}).waitFor();
+      await page.getByRole('button',{name:'新增物料报价',exact:true}).click();
+      await page.getByLabel('采购单价',{exact:true}).waitFor();
+      await page.screenshot({path:path.join(artifacts,'material-costs.png'),fullPage:true});
+      await page.getByRole("button", { name: "到期提醒与后台检查", exact: true }).click();
+      await page.getByRole("heading", { name: "实际运行记录", exact: true }).waitFor();
+      assert.equal(await page.getByRole("button", { name: "立即检查", exact: true }).count(), 0);
       await page.setViewportSize({ width: 390, height: 844 });
       await page.screenshot({
         path: path.join(artifacts, "logistics-mobile.png"),
@@ -687,7 +747,7 @@ try {
         .getByRole("heading", { name: "成本与物流计价", exact: true })
         .waitFor();
       assert.deepEqual(errors, []);
-      pass("浏览器跟单员登录、费率表/录入/成本表、手机布局、刷新与控制台");
+      pass("浏览器跟单员登录、费率表/录入/成本表、到期记录及管理员操作隔离、手机布局、刷新与控制台");
     } finally {
       await browser.close();
     }
