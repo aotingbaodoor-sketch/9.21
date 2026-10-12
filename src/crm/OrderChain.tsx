@@ -40,6 +40,7 @@ function ChainList() {
       order_number: string;
       company: string;
       project_id: string;
+      trade_term: string;
     }[];
   }>("/supply/chain", revision);
   const [selected, setSelected] = useState("");
@@ -52,7 +53,7 @@ function ChainList() {
         <h2>订单履约链</h2>
         <p>客户编号贯穿 · WO → PO → MO。旧订单与履约页面仍保留。</p>
         <p className="muted">
-          已开放工单、生产指令、物流凭证、FOB付款核验及签收关闭。节点须逐项核实；未配置审批人或缺少凭证时不会自动通过。
+          已开放工单、生产指令、物流凭证、五种术语付款核验及签收关闭。节点须逐项核实；未配置审批人或缺少凭证时不会自动通过。
         </p>
         <p>
           <Link to="/supply">原订单与履约</Link> ·{" "}
@@ -133,7 +134,7 @@ function CreateWorkOrder({
   candidate,
   done,
 }: {
-  candidate: { id: string; project_id: string };
+  candidate: { id: string; project_id: string;trade_term:string };
   done: () => void;
 }) {
   const m = useMutation(),
@@ -154,7 +155,7 @@ function CreateWorkOrder({
             confirmationFileId: file,
             expectedDelivery: due,
             orderType,
-            tradeTerm: "FOB",
+            tradeTerm: candidate.trade_term,
           },
           done,
         );
@@ -191,7 +192,7 @@ function CreateWorkOrder({
           <option value="replacement">补件单</option>
         </select>
       </Field>
-      <p>贸易术语：FOB。EXW报关适用规则待确认，当前不能启用。</p>
+      <p>沿用已确认报价的贸易术语：{candidate.trade_term}。EXW 保留22态，装柜与出口报关标记不适用并留痕，货代安排及提货仍须核实。</p>
       <button className="primary" disabled={m.busy || !files.length}>
         核实凭证并签发WO
       </button>

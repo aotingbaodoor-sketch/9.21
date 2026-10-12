@@ -35,6 +35,7 @@ import './daily-prices.css';
 const DailyPrices=lazy(()=>import('./DailyPrices.tsx'));
 const Backups=lazy(()=>import('./Backups.tsx'));
 const Tariffs=lazy(()=>import('./Tariffs.tsx'));
+const Logistics=lazy(()=>import('./Logistics.tsx'));
 const OrderChain=lazy(()=>import('./OrderChain.tsx'));
 const ManufacturingView=lazy(()=>import('./OrderChain.tsx').then(m=>({default:m.ManufacturingView})));
 const DocumentClasses=lazy(()=>import('./Numbering.tsx').then(m=>({default:m.DocumentClasses})));
@@ -227,6 +228,7 @@ function Root() {
             <Route path="/customers/:id/chain" element={<CustomerDocumentChain/>}/>
             <Route path="/daily-prices" element={<DailyPrices/>}/>
             <Route path="/tariffs" element={<Tariffs/>}/>
+            <Route path="/logistics-costs" element={<Logistics/>}/>
             <Route path="/quotations/products" element={<QuoteAdmin mode="products" />} />
             <Route path="/quotations/freight" element={<QuoteAdmin mode="freight" />} />
             <Route path="/quotations/settings" element={<QuoteAdmin mode="settings" />} />

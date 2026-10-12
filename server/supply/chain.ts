@@ -227,7 +227,7 @@ export function registerOrderChain(
     const candidates =
       req.actor.role === "admin"
         ? (
-            await pool.query(`SELECT so.id,so.order_number,c.company,c.crm_customer_code,qo.project_id FROM sales_orders so
+            await pool.query(`SELECT so.id,so.order_number,c.company,c.crm_customer_code,qo.project_id,qo.snapshot->'input'->>'incoterm' trade_term FROM sales_orders so
     JOIN quotation_orders qo ON qo.id=so.quotation_order_id JOIN quotation_projects qp ON qp.id=qo.project_id JOIN customers c ON c.id=qp.customer_id
     WHERE so.status<>'cancelled' AND c.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM crm_work_orders w WHERE w.sales_order_id=so.id) ORDER BY so.created_at DESC`)
           ).rows
@@ -243,18 +243,13 @@ export function registerOrderChain(
           expectedDelivery: date,
           confirmationFileId: uid,
           orderType: z.enum(["sample", "bulk", "replacement"]),
-          tradeTerm: z.enum(["FOB", "EXW"]).default("FOB"),
+          tradeTerm: z.enum(["EXW","FOB","CIF","DAP","DDP"]).default("EXW"),
         })
         .strict()
         .parse(req.body);
-      if (input.tradeTerm === "EXW")
-        throw new HttpError(
-          409,
-          "EXW报关适用性存在文件冲突，等待业务确认；未自动跳过节点",
-        );
       const so = (
         await db.query(
-          `SELECT so.id,so.status,qp.customer_id,qp.id project_id,c.crm_customer_code,c.owner_id,qd.document_id,qd.created_at AS deposit_confirmed_at,qd.created_by AS deposit_confirmed_by
+          `SELECT so.id,so.status,qp.customer_id,qp.id project_id,c.crm_customer_code,c.owner_id,qd.document_id,qd.created_at AS deposit_confirmed_at,qd.created_by AS deposit_confirmed_by,qo.snapshot->'input'->>'incoterm' trade_term
    FROM sales_orders so JOIN quotation_orders qo ON qo.id=so.quotation_order_id JOIN quotation_projects qp ON qp.id=qo.project_id
    JOIN customers c ON c.id=qp.customer_id LEFT JOIN quotation_deposits qd ON qd.quotation_order_id=qo.id
    WHERE so.id=$1 AND c.deleted_at IS NULL FOR UPDATE OF so`,
@@ -263,6 +258,7 @@ export function registerOrderChain(
       ).rows[0];
       if (!so || so.status === "cancelled")
         throw new HttpError(404, "有效销售订单不存在");
+      if(so.trade_term!==input.tradeTerm)throw new HttpError(409,'WO须沿用已确认报价的贸易术语，不可改写历史订单约定');
       if (!so.document_id)
         throw new HttpError(
           409,
@@ -328,6 +324,7 @@ export function registerOrderChain(
             "INSERT INTO crm_order_progress(work_order_id,stage_code) SELECT $1,code FROM crm_fulfillment_stage",
             [id],
           );
+          if(input.tradeTerm==='EXW')await tx.query("UPDATE crm_order_progress SET status='n/a',is_applicable=false,skip_reason='EXW：买方负责厂外装运与出口报关；保留买方回传资料，不作为卖方履约动作',skipped_by=$2,skipped_on=now() WHERE work_order_id=$1 AND stage_code IN ('loaded','export_cleared')",[id,req.actor.id]);
           await tx.query(
             "UPDATE crm_order_progress SET status='completed',completed_at=$4,completed_by=$2,evidence_id=$3 WHERE work_order_id=$1 AND stage_code='deposit_confirmed'",
             [

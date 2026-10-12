@@ -11,7 +11,7 @@ export function publicCalculation(c: Calculation, p: QuotePolicy): PublicCalcula
   const { private: priv, lines, ...rest } = c;
   return { ...rest, lines: lines.map(({ private: _private, ...l }) => l), ...(p.viewCosts ? { costs: { costCny: priv.costCny, marginPct: priv.marginPct }, lineCosts: lines.map(l => ({ cost: l.private.cost, minimum: l.private.minimum, marginPct: l.private.marginPct })) } : {}), ...(p.viewFreightCost ? { freightCosts: { freightCostCny: priv.freightCostCny } } : {}) };
 }
-export function calculate(input: QuoteInput, products: Product[], freight: Freight | null, settings: QuotationSettings, permission: QuotePolicy, today: string, projectId: string): Calculation {
+export function calculate(input: QuoteInput, products: Product[], freight: Freight | null, settings: QuotationSettings, permission: QuotePolicy, today: string, projectId: string, externalLogistics=false): Calculation {
   const issues: Issue[] = [], expiry = [input.validUntil];
   const issue = (code: string, message: string, discipline: Issue["discipline"] = "admin", hard = true, line?: string) => { issues.push({ code, message, discipline, hard, ...(line ? { line } : {}) }); };
   const fx = (currency: string) => {
@@ -63,6 +63,8 @@ export function calculate(input: QuoteInput, products: Product[], freight: Freig
     if (line.unitPrice !== null && !permission.canAdjustUnitPrice) issue("override", `${p.sku} 手动单价超出员工权限，须管理员审批`, "admin", false, line.key);
     if (line.discountPct > permission.maxDiscountPct) issue("discount", `${p.sku} 折扣超过权限`, "admin", false, line.key);
     const unitPrice = round((line.unitPrice === null ? convert(sale) : d(line.unitPrice)).mul(d(1).minus(d(line.discountPct).div(100))));
+    minimum=Decimal.max(minimum,cost.mul(settings.logisticsPolicy?.floorMultiplier??1.2));
+    if(d(unitPrice).mul(quoteFx.cnyPerUnit).lt(cost))issue('G-35',`${p.sku}销售价低于实际采购成本，任何角色均不得放行`,'admin',true,line.key);
     if (d(unitPrice).lt(convert(minimum))) issue("minimum", `${p.sku} 低于最低销售价`, "admin", false, line.key);
     const pk = p.packing, packages = Math.ceil(line.quantity / pk.unitsPerPackage);
     if (!pk.configured || !pk.depthMm || [pk.kgPerSqm, pk.fixedKg, pk.tareKg, pk.costPerPackage, pk.salePerPackage].some(v => v === null)) issue("packing", `${p.sku} 包装/重量/费用规则未完整配置`, "logistics", true, line.key);
@@ -83,7 +85,7 @@ export function calculate(input: QuoteInput, products: Product[], freight: Freig
   if (input.incoterm === "FCA" && !settings.fcaConfigured) issue("fca", "FCA 交货地点和费用范围尚未由管理员确认", "logistics");
   if (input.customerForwarder && !["EXW", "FOB", "FCA"].includes(input.incoterm)) issue("forwarder", "该贸易条款不能以客户自付运费跳过卖方运输义务", "logistics");
   let freightCost: Decimal | null = d(0), freightTotal: number | null = 0;
-  if (required[input.incoterm].length) {
+  if (!externalLogistics && required[input.incoterm].length) {
     const valid = freight?.active && freight.country.toLowerCase() === input.country.toLowerCase() && (!freight.city || freight.city.toLowerCase() === input.city.toLowerCase()) && freight.originPort === input.originPort && freight.destinationPort === input.destinationPort && freight.mode === input.freightMode && (!freight.projectId || freight.projectId === projectId) && freight.validFrom <= today && freight.validUntil >= today && freight.validUntil >= input.targetDate && freight.validUntil >= input.validUntil;
     if (!valid || !freight) { issue("freight", "缺少匹配路线且覆盖有效期及发货日的真实运价，不能按零运费出单", "logistics"); freightCost = null; freightTotal = null; }
     else {
@@ -103,7 +105,8 @@ export function calculate(input: QuoteInput, products: Product[], freight: Freig
     }
   }
   const productTotal = round(sum(lines.map(l => l.productTotal))), packingTotal = round(sum(lines.map(l => l.packingTotal))), total = freightTotal === null || issues.some(i=>i.hard) ? null : round(sum([productTotal, packingTotal, freightTotal]));
-  const sellCny = d(total || 0).mul(quoteFx.cnyPerUnit), marginPct = total === null ? null : sellCny.gt(0) ? round(sellCny.minus(totalCost).div(sellCny).mul(100)) : -100;
+  const pricedTotal=freightTotal===null?null:round(sum([productTotal,packingTotal,freightTotal]));
+  const sellCny = d(pricedTotal || 0).mul(quoteFx.cnyPerUnit), marginPct = pricedTotal===null||issues.some(i=>i.hard&&i.code!=='G-35') ? null : sellCny.gt(0) ? round(sellCny.minus(totalCost).div(sellCny).mul(100)) : -100;
   if (marginPct !== null && marginPct < Math.max(settings.minMarginPct, permission.minMarginPct)) issue("margin", "整单低于最低毛利要求", "admin", false);
   return { lines, issues, currency: input.currency, productTotal, packingTotal, freightTotal, total, packages, cbm, netKg, grossKg, containers, validThrough: expiry.sort()[0], private: { costCny: round(totalCost), marginPct, freightCostCny: freightCost === null ? null : round(freightCost), freight, settings, fx: quoteFx, policy: permission } };
 }

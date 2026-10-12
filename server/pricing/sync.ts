@@ -6,6 +6,17 @@ import {transaction} from '../db.ts';
 import {pricingConfigSchema,type PricingConfig} from '../../shared/pricing.ts';
 import type {QuotationSettings} from '../../shared/quoting.ts';
 export const ECB_URL='https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml';
+export const FX_BACKUP_URL='https://api.frankfurter.dev/v2/providers/ecb/rates?base=EUR';
+export function parseFxBackup(json:string,now=new Date()){
+ if(json.length>200000)throw new Error('来源内容超出限制');
+ const rows:unknown=JSON.parse(json);if(!Array.isArray(rows)||rows.length<20)throw new Error('来源币种不完整');
+ const rates:Record<string,string>={EUR:'1'},seen=new Set<string>();let date='';
+ for(const row of rows){if(!row||row.base!=='EUR'||!/^[A-Z]{3}$/.test(row.quote)||typeof row.rate!=='number'||!Number.isFinite(row.rate)||row.rate<=0||seen.has(row.quote)||(row.quote==='EUR'&&row.rate!==1)||!/^\d{4}-\d{2}-\d{2}$/.test(row.date))throw new Error('来源格式不符');if(date&&date!==row.date)throw new Error('来源日期不唯一');date=row.date;seen.add(row.quote);rates[row.quote]=String(row.rate);}
+ if(date>day(now)||new Date(date).toISOString().slice(0,10)!==date||!rates.CNY||!rates.USD)throw new Error('来源日期或币种无效');
+ const cnyRates=Object.fromEntries(Object.entries(rates).map(([currency,rate])=>[currency,new Decimal(rates.CNY).div(rate).toDecimalPlaces(10).toNumber()]));
+ if(Object.values(cnyRates).some(v=>v<=0||v>1e6))throw new Error('来源汇率无效');
+ return {date,rates,cnyRates,sha:createHash('sha256').update(JSON.stringify({source:'Frankfurter ECB',date,rates})).digest('hex')};
+}
 export const day=(d=new Date())=>new Date(d.getTime()+8*3600000).toISOString().slice(0,10);
 export const addDays=(s:string,n:number)=>new Date(Date.parse(s+'T00:00:00Z')+n*86400000).toISOString().slice(0,10);
 export function nextRun(times:string[],now=new Date()) {
@@ -32,13 +43,16 @@ export async function pricingState(db:Db) {
   return {...row,data:pricingConfigSchema.parse(row.data)} as {version:number;data:PricingConfig;next_run:Date;last_checked:Date|null;last_success:Date|null;last_error:string|null;lease_token:string|null;lease_until:Date|null;requested_by:string|null;last_heartbeat:Date|null};
 }
 export async function effectiveSettings(db:Db,settings:QuotationSettings) {
- const state=await pricingState(db),batch=(await db.query('SELECT id,source_date::text,cny_rates,first_synced_at FROM pricing_fx_batches ORDER BY source_date DESC,first_synced_at DESC LIMIT 1')).rows[0];
+ const state=await pricingState(db),batch=(await db.query('SELECT id,source,source_url,source_date::text,cny_rates,first_synced_at FROM pricing_fx_batches ORDER BY source_date DESC,first_synced_at DESC LIMIT 1')).rows[0];
  const result=structuredClone(settings);
  if(state.data.mode==='ecb_reference') for(const currency of state.data.currencies) {
   // Explicit adoption replaces ONLY selected currencies. Missing source must not fall back silently.
   delete result.fx[currency];
-  if(batch?.cny_rates[currency]&&currency!=='CNY')result.fx[currency]={cnyPerUnit:batch.cny_rates[currency],date:batch.source_date,validUntil:addDays(batch.source_date,state.data.referenceDays),source:`ECB参考汇率（非银行买卖价） ${ECB_URL} #${batch.id}`,bufferPct:state.data.bufferPct};
+  if(batch?.cny_rates[currency]&&currency!=='CNY')result.fx[currency]={cnyPerUnit:batch.cny_rates[currency],date:batch.source_date,validUntil:addDays(batch.source_date,state.data.referenceDays),source:`${batch.source}参考汇率（非银行买卖价） ${batch.source_url} #${batch.id}`,bufferPct:state.data.bufferPct};
  }
+ // Confirmed internal policy, not an upstream publication or a successful sync.
+ // Preserve any currently valid company rule; never fabricate uncovered currencies.
+ if(!result.fx.USD||result.fx.USD.validUntil<day())result.fx.USD={cnyPerUnit:6.72,date:day(),validUntil:addDays(day(),state.data.referenceDays),source:'内部兜底值 USD 6.72（非当日市场汇率；日期为内部政策使用日）',bufferPct:0};
  return {settings:result,state,batch};
 }
 export function createPricingWorker(pool:pg.Pool,fetcher:typeof fetch=fetch) {
@@ -60,16 +74,17 @@ export function createPricingWorker(pool:pg.Pool,fetcher:typeof fetch=fetch) {
     return {token:t,id};
    });
    if(!claim)return;token=claim.token;runId=claim.id;
-   let parsed:ReturnType<typeof parseEcb>|undefined,xml='',error='来源暂不可用',attempts=0;
+   let parsed:ReturnType<typeof parseEcb>|undefined,xml='',error='来源暂不可用',attempts=0,source='ECB',sourceUrl=ECB_URL;
    for(let i=0;i<3;i++) {
     attempts=i+1;
     try {
-     const response=await fetcher(ECB_URL,{signal:AbortSignal.timeout(15000),redirect:'error',headers:{Accept:'application/xml'}});
+     source=i===2?'Frankfurter ECB':'ECB';sourceUrl=i===2?FX_BACKUP_URL:ECB_URL;
+     const response=await fetcher(sourceUrl,{signal:AbortSignal.timeout(15000),redirect:'error',headers:{Accept:i===2?'application/json':'application/xml'}});
      if(!response.ok)throw new Error(`来源HTTP ${response.status}`);
      // Bound the response stream before parsing to avoid unbounded memory use.
      const reader=response.body?.getReader();if(!reader)throw new Error('来源内容为空');let bytes=0;const chunks:Uint8Array[]=[];
      try{while(true){const r=await reader.read();if(r.done)break;bytes+=r.value.length;if(bytes>200000)throw new Error('来源内容超出限制');chunks.push(r.value);}}finally{await reader.cancel();}
-     xml=Buffer.concat(chunks).toString('utf8');parsed=parseEcb(xml,now);break;
+     xml=Buffer.concat(chunks).toString('utf8');parsed=i===2?parseFxBackup(xml,now):parseEcb(xml,now);break;
     } catch(e) {error=e instanceof Error&&/^(来源|进程)/.test(e.message)?e.message:'来源网络超时或连接失败';if(i<2)await new Promise(r=>setTimeout(r,1000*(i+1)));}
    }
    await transaction(pool,async db=>{
@@ -81,7 +96,7 @@ export function createPricingWorker(pool:pg.Pool,fetcher:typeof fetch=fetch) {
      if(latest&&parsed.date<latest.source_date){parsed=undefined;error='来源日期倒退，保留最近成功数据';}
     }
     if(parsed) {
-     const id=randomUUID(),r=await db.query('INSERT INTO pricing_fx_batches(id,source,source_url,source_date,sha256,raw_xml,rates,cny_rates,first_synced_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(sha256) DO NOTHING RETURNING id',[id,'ECB',ECB_URL,parsed.date,parsed.sha,xml,JSON.stringify(parsed.rates),JSON.stringify(parsed.cnyRates),now]);
+     const id=randomUUID(),r=await db.query('INSERT INTO pricing_fx_batches(id,source,source_url,source_date,sha256,raw_xml,rates,cny_rates,first_synced_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(sha256) DO NOTHING RETURNING id',[id,source,sourceUrl,parsed.date,parsed.sha,xml,JSON.stringify(parsed.rates),JSON.stringify(parsed.cnyRates),now]);
      status=r.rowCount?'updated':'unchanged';batchId=r.rowCount?id:(await db.query('SELECT id FROM pricing_fx_batches WHERE sha256=$1',[parsed.sha])).rows[0].id;
      await db.query('UPDATE pricing_alerts SET resolved_at=$1 WHERE resolved_at IS NULL',[now]);
     }

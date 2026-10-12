@@ -17,6 +17,8 @@ import { receiveQuoteDeposit,openPaidSalesOrder } from './deposit.ts';
 import { issueCustomerQuote, requireQuoteCustomer } from './customer-lifecycle.ts';
 import {effectiveSettings} from '../pricing/sync.ts';
 import {tariffBasis,assertTariffBasis} from '../tariffs/quotation.ts';
+import {applyLogistics} from '../logistics/engine.ts';
+import {loadCostRates,logisticsChanges} from '../logistics/routes.ts';
 
 type Mutate = (req: Request, res: Response, run: (db: pg.PoolClient) => Promise<unknown>) => Promise<void>;
 type Project = { id: string; customer_id: string; name: string; version: number; company: string; owner_id: string };
@@ -42,6 +44,7 @@ async function quote(db: Db, actor: User, quoteId: string, lock = false) {
   return { q: current, p };
 }
 async function compute(db: Db, actor: User, p: Project, input: QuoteInput) {
+  if(actor.role!=='admin'&&input.logistics?.ddp)throw new HttpError(403,'DDP内部风险核算须由管理员补齐后特批');
   // A transaction owns one client: finish each query before starting the next.
   // Keep these reads on that client rather than escaping the transaction via the pool.
   const stored = await getQuoteSettings(db);
@@ -51,9 +54,13 @@ async function compute(db: Db, actor: User, p: Project, input: QuoteInput) {
     ? await db.query("SELECT id,data,version FROM quotation_freight WHERE id=$1", [input.freightId])
     : { rows: [] };
   const crm = await repo.settings(db);
-  const c = calculate(input, products.rows.map(r => ({ ...r.data, id: r.id, version: r.version })) as Product[], rates.rows[0] ? { ...rates.rows[0].data, id: rates.rows[0].id, version: rates.rows[0].version } as Freight : null, settings, policy(settings, actor), businessDay(crm.timezone), p.id);
+  const freight=rates.rows[0] ? { ...rates.rows[0].data, id: rates.rows[0].id, version: rates.rows[0].version } as Freight : null;
+  if(freight?.projectId&&freight.projectId!==p.id)throw new HttpError(403,'项目专属运价不属于此项目');
+  const c = calculate(input, products.rows.map(r => ({ ...r.data, id: r.id, version: r.version })) as Product[], freight, settings, policy(settings, actor), businessDay(crm.timezone), p.id,true);
   c.priceBasis={settingsVersion:stored.version,fx:Object.fromEntries([...new Set([input.currency,rates.rows[0]?.data.currency].filter((v):v is string=>!!v&&v!=='CNY'))].sort().map(v=>[v,settings.fx[v]??null])),productVersions:Object.fromEntries(products.rows.map(r=>[r.id,r.version])),freightVersion:rates.rows[0]?.version??null,fxBatchId:state.data.mode==='ecb_reference'?batch?.id??null:null,policyVersion:state.version};
   c.tariffBasis=await tariffBasis(db,input);
+  applyLogistics(c,input,await loadCostRates(db,input.logistics?.rateIds??[]),settings,businessDay(crm.timezone));
+  Object.assign(c.priceBasis.fx,c.private.logistics?.fx??{});
   for(const message of c.tariffBasis.errors)c.issues.push({code:'G-37',message,discipline:'logistics',hard:true});
   if(c.tariffBasis.errors.length)c.total=null;
   return c;
@@ -62,6 +69,7 @@ async function priceChanges(db:Db,q:QuoteRow):Promise<string[]> {
   if(['issued','confirmed'].includes(q.status))return [];
   const b=q.snapshot.priceBasis;if(!b)return ['旧版草稿缺少价格版本依据，请另存新版本重新核算'];
   const stored=await getQuoteSettings(db),{settings}=await effectiveSettings(db,stored.data),changes:string[]=[];
+  changes.push(...await logisticsChanges(db,q.snapshot.private.logistics));
   if(stored.version!==b.settingsVersion)changes.push('公司报价规则已变更');
   for(const [currency,previous] of Object.entries(b.fx))if(JSON.stringify(previous&&Object.entries(previous as object).sort())!==JSON.stringify(settings.fx[currency]&&Object.entries(settings.fx[currency]).sort()))changes.push(`${currency}报价汇率或有效期已变化`);
   for(const [id,version] of Object.entries(b.productVersions)){const row=(await db.query('SELECT version,data FROM quotation_products WHERE id=$1',[id])).rows[0];if(!row||!row.data.active||row.version!==version)changes.push('产品价格或规格已变化');}
@@ -79,7 +87,7 @@ async function fileAccess(db: Db, actor: User, projectId: string, taskId?: strin
   const t = await task(db, actor, taskId); if (t.project_id !== projectId) throw new HttpError(404, "附件不属于该任务");
 }
 function productView(p: Product) {
-  const { prices: _prices, formula: _formula, bands: _bands, packing, options, ...publicData } = p;
+  const { prices: _prices, formula: _formula, bands: _bands, packing, options, provenance:_provenance,...publicData } = p;
   const { costPerPackage: _cost, kgPerSqm: _kg, fixedKg: _fixed, tareKg: _tare, ...packingPublic } = packing;
   return { ...publicData, packing: packingPublic, options: options.map(({ cost: _optionCost, ...o }) => o) };
 }
@@ -90,6 +98,8 @@ export function registerQuoting(app: Express, pool: pg.Pool, mutate: Mutate) {
   });
   app.put("/api/quoting/settings", async (req, res) => mutate(req, res, async db => {
     requireAdmin(req.actor); const input = quotationSettingsSchema.parse(req.body.data);
+    const old=(await getQuoteSettings(db)).data;
+    if(JSON.stringify(old.logisticsPolicy)!==JSON.stringify(input.logisticsPolicy))throw new HttpError(422,'物流底线系数请在成本与物流计价页面修改并记录原因');
     const r = await db.query("UPDATE quotation_settings SET data=$1,version=version+1 WHERE id=1 AND version=$2 RETURNING version", [JSON.stringify(input), z.number().int().parse(req.body.version)]);
     if (!r.rowCount) throw new HttpError(409, "设置已被修改，请刷新后重试"); await repo.audit(db, req.actor, "更新报价规则", "quotation_settings"); return r.rows[0];
   }));
@@ -149,6 +159,7 @@ export function registerQuoting(app: Express, pool: pg.Pool, mutate: Mutate) {
     const input = quoteInputSchema.parse(req.body.input), reason = z.string().trim().min(1).max(1000).parse(req.body.reason), c = await compute(db, req.actor, p, input), customer = await repo.customer(db, req.actor, p.customer_id);
     const prior = (await db.query("SELECT number,snapshot->>'total' total FROM quotation_versions WHERE project_id=$1 ORDER BY number DESC LIMIT 1", [p.id])).rows[0], quoteId = randomUUID();
     await db.query("INSERT INTO quotation_versions(id,project_id,number,input,snapshot,customer_snapshot,reason,previous_total,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)", [quoteId, p.id, (prior?.number || 0) + 1, JSON.stringify(input), JSON.stringify(c), JSON.stringify({ company: customer.company, contact: customer.data.contact || "", email: customer.data.email || "", country: customer.data.country || "" }), reason, prior?.total || null, req.actor.id]);
+    await db.query('INSERT INTO logistics_quote_sheets(quote_id,snapshot,created_by) VALUES($1,$2,$3)',[quoteId,JSON.stringify(c.private.logistics),req.actor.id]);
     await db.query("UPDATE quotation_projects SET version=version+1,name=$2 WHERE id=$1", [p.id, input.name]); await repo.audit(db, req.actor, "创建报价版本", quoteId, { number: (prior?.number || 0) + 1, previousTotal: prior?.total, total: c.total, reason }); return { id: quoteId };
   }));
   app.get("/api/quoting/versions/:id", async (req, res) => {
@@ -156,7 +167,8 @@ export function registerQuoting(app: Express, pool: pg.Pool, mutate: Mutate) {
     const [reviews, documents] = await Promise.all([pool.query("SELECT id,discipline,assigned_to,status,comment,file_id,version FROM quotation_reviews WHERE quote_id=$1", [q.id]), pool.query("SELECT id,kind,language,sha256,created_at FROM quotation_documents WHERE quote_id=$1", [q.id])]);
     const payment=(await pool.query(`SELECT d.id,r.doc_no FROM quotation_orders o JOIN quotation_deposits d ON d.quotation_order_id=o.id JOIN crm_document_registry r ON r.id=d.document_id WHERE o.quote_id=$1`,[q.id])).rows[0] ?? null;
     const salesOrder=(await pool.query('SELECT s.id,s.order_number FROM quotation_orders o JOIN sales_orders s ON s.quotation_order_id=o.id WHERE o.quote_id=$1',[q.id])).rows[0] ?? null;
-    res.json({ ...q, priceChanges:await priceChanges(pool,q), docNo:q.doc_no ?? null, payment, salesOrder, snapshot: publicCalculation(q.snapshot, policy(settings, req.actor)), reviews: reviews.rows, documents: documents.rows });
+    const publicInput=structuredClone(q.input);if(req.actor.role!=='admin'&&publicInput.logistics)delete publicInput.logistics.ddp;
+    res.json({ ...q,input:publicInput, priceChanges:await priceChanges(pool,q), docNo:q.doc_no ?? null, payment, salesOrder, snapshot: publicCalculation(q.snapshot, policy(settings, req.actor)), reviews: reviews.rows, documents: documents.rows });
   });
   app.post("/api/quoting/versions/:id/submit", async (req, res) => mutate(req, res, async db => {
     const { q } = await quote(db, req.actor, id(req), true); repo.checkVersion(q, req.body.version);
@@ -188,6 +200,7 @@ export function registerQuoting(app: Express, pool: pg.Pool, mutate: Mutate) {
     const t = await task(db, req.actor, id(req), true); repo.checkVersion(t, req.body.version);
     const input = z.object({ status: z.enum(["approved", "rejected"]), comment: z.string().trim().min(1).max(2000), fileId: z.uuid().nullable().default(null) }).parse(req.body);
     if (t.status !== "pending" || (t.discipline !== "production" && t.quote_status !== "submitted")) throw new HttpError(409, "任务已处理或报价状态已变化");
+    if(input.status==='approved'&&(t.snapshot as Calculation).issues.some(v=>v.code==='DDP-approval')&&t.discipline==='admin'&&t.assigned_to!==req.actor.id)throw new HttpError(409,'DDP特批须由被明确指派的审批人处理，不得无人审批或代签');
     if (input.fileId && !(await db.query("SELECT 1 FROM quotation_files WHERE id=$1 AND project_id=$2", [input.fileId, t.project_id])).rowCount) throw new HttpError(404, "附件不属于此项目");
     if (input.status === "approved" && t.discipline !== "production" && (t.snapshot as Calculation).issues.some(i => i.hard && i.discipline === t.discipline)) throw new HttpError(422, "数据缺失/失效不能用审批跳过。请维护规则后新建报价版本");
     if (input.status === "approved" && ["technical", "production"].includes(t.discipline)) {
@@ -203,7 +216,12 @@ export function registerQuoting(app: Express, pool: pg.Pool, mutate: Mutate) {
   }));
   app.post("/api/quoting/versions/:id/issue", async (req, res) => mutate(req, res, async db => {
     const { q, p } = await quote(db, req.actor, id(req), true); repo.checkVersion(q, req.body.version);
+    await db.query('SELECT id FROM quotation_settings WHERE id=1 FOR SHARE');
+    await db.query('SELECT id FROM pricing_sync_config WHERE id=1 FOR SHARE');
+    await db.query('SELECT id FROM quotation_products WHERE id=ANY($1::uuid[]) ORDER BY id FOR SHARE',[q.input.lines.map(l=>l.productId)]);
+    if(q.input.freightId)await db.query('SELECT id FROM quotation_freight WHERE id=$1 FOR SHARE',[q.input.freightId]);
     await assertTariffBasis(db,q.input,q.snapshot.tariffBasis);
+    await db.query('SELECT id FROM logistics_cost_rates WHERE id=ANY($1::uuid[]) FOR SHARE',[q.input.logistics?.rateIds??[]]);
     const changed=await priceChanges(db,q);if(changed.length)throw new HttpError(409,changed.join('；')+'。请重新核算并审批新版本');
     const today = businessDay((await repo.settings(db)).timezone);
     if (q.status !== "approved" || q.snapshot.issues.some(i => i.hard) || q.snapshot.total === null || q.snapshot.validThrough < today) throw new HttpError(422, "报价未通过全部审核、缺少数据或已过期");

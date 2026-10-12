@@ -47,6 +47,7 @@ import {registerSettlement} from './supply/settlement.ts';
 import {registerCompletion} from './supply/completion.ts';
 import {registerBackup} from './backup-routes.ts';
 import {registerTariffs} from './tariffs/routes.ts';
+import {registerLogistics} from './logistics/routes.ts';
 
 declare global {
   namespace Express {
@@ -270,9 +271,9 @@ export function createApp(pool: pg.Pool, options: Options) {
     res.json(value);
   };
   app.use("/api", (req, _res, next) => {
-    if (["logistics", "technical"].includes(req.actor.role) && !req.path.startsWith("/quoting/") && !req.path.startsWith("/supply/") && !(req.actor.role==='logistics'&&(req.path.startsWith('/pricing/')||req.path.startsWith('/tariffs'))) && req.path !== "/profile")
+    if (["logistics", "technical"].includes(req.actor.role) && !req.path.startsWith("/quoting/") && !req.path.startsWith("/supply/") && !(req.actor.role==='logistics'&&(req.path.startsWith('/pricing/')||req.path.startsWith('/tariffs')||req.path.startsWith('/logistics/'))) && req.path !== "/profile")
       throw new HttpError(403, "该岗位仅可访问已授权的报价任务");
-    if (req.actor.role === "coordinator" && !req.path.startsWith("/supply/") && req.path !== "/profile")
+    if (req.actor.role === "coordinator" && !req.path.startsWith("/supply/") && !req.path.startsWith('/logistics/') && !req.path.startsWith('/tariffs') && !req.path.startsWith('/pricing/') && req.path !== "/profile")
       throw new HttpError(403, "跟单账号仅可访问已分配的供应链订单");
     if (req.actor.role === "factory" && !req.path.startsWith("/supply/") && req.path !== "/profile")
       throw new HttpError(403, "工厂账号仅可访问本工厂产品、订单和生产反馈");
@@ -288,6 +289,7 @@ export function createApp(pool: pg.Pool, options: Options) {
   registerCompletion(app,pool,mutate);
   registerBackup(app,pool,mutate);
   registerTariffs(app,pool,mutate);
+  registerLogistics(app,pool,mutate);
   registerNumbering(app,pool,mutate);
   registerCustomerIdentity(app,pool,mutate);
   app.get("/api/customers", async (req, res) =>

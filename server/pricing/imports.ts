@@ -11,7 +11,7 @@ export type ImportRow=Record<string,string|number|null>;
 export async function readImport(bytes:Buffer,name:string):Promise<ImportRow[]> {
  if(bytes.length>2*1024*1024)throw new HttpError(400,'文件不能超过2MB');
  const workbook=new ExcelJS.Workbook();
- if(/\.csv$/i.test(name))await workbook.csv.read(Readable.from([bytes.toString('utf8').replace(/^\uFEFF/,'')]),{parserOptions:{maxRows:502}});
+ if(/\.csv$/i.test(name))await workbook.csv.read(Readable.from([bytes.toString('utf8').replace(/^\uFEFF/,'')]),{parserOptions:{maxRows:502},map:(value:string)=>value}); // Preserve YYYY-MM-DD and leading zeros; no local-time CSV date coercion.
  else if(/\.xlsx$/i.test(name)) {
   if(bytes.length<46||bytes.readUInt32LE(0)!==0x04034b50)throw new HttpError(400,'Excel文件格式无效');
   let unpacked=0,entries=0;
@@ -27,7 +27,7 @@ export async function readImport(bytes:Buffer,name:string):Promise<ImportRow[]> 
  sheet.eachRow((row,n)=>{if(n===1)return;const item:ImportRow=Object.fromEntries(headers.filter(Boolean).map(h=>[h,null]));row.eachCell((cell,c)=>{
   if(!headers[c])return;
   if(cell.type===ExcelJS.ValueType.Formula||cell.type===ExcelJS.ValueType.Hyperlink||cell.type===ExcelJS.ValueType.Error)throw new HttpError(400,`第${n}行含公式、链接或错误；请粘贴为原始数值再导入`);
-  item[headers[c]]=typeof cell.value==='number'?cell.value:cell.text.trim()||null;
+  item[headers[c]]=cell.value instanceof Date?cell.value.toISOString().slice(0,10):typeof cell.value==='number'?cell.value:cell.text.trim()||null;
  });if(Object.values(item).some(v=>v!==null&&v!==''))rows.push(item);});
  if(!rows.length)throw new HttpError(400,'没有价格记录');return rows;
 }

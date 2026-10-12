@@ -32,7 +32,7 @@ export const MENU: readonly MenuNode[] = [
       link('records', '跟进（历史记录）', '/records', office),
       link('quotations', '报价单', '/quotations', office),
       { id: 'quote-tools', label: '报价工具', children: [
-        link('daily-prices', '每日价格与运费', '/daily-prices', ['admin', 'sales', 'logistics']),
+        link('daily-prices', '每日价格与运费', '/daily-prices', ['admin', 'sales', 'logistics','coordinator']),
         link('quote-settings', '报价规则与汇率', '/quotations/settings', ['admin']),
       ] },
       link('sales-analytics', '数据统计（业务员视角）', '/analytics', ['sales']),
@@ -48,7 +48,8 @@ export const MENU: readonly MenuNode[] = [
   ] },
   { id: 'scm', label: '3 供应链管理部 SCM', children: [
     link('freight', '物流与货代', '/quotations/freight', ['admin', 'logistics']),
-    link('tariffs', '海关税率与来源', '/tariffs', ['admin', 'sales', 'logistics'],{businessOwner:'SCM物流与货代'}),
+    link('tariffs', '海关税率与来源', '/tariffs', ['admin', 'sales', 'logistics','coordinator'],{businessOwner:'SCM物流与货代'}),
+    link('logistics-costs','成本与物流计价','/logistics-costs',['admin','coordinator','logistics','sales']),
     link('supply', '订单与履约', '/supply', ['admin', 'sales', 'technical', 'logistics']),
     link('order-chain', '订单履约链（WO / PO / MO）', '/supply/chain', ['admin','sales','technical','logistics','coordinator']),
     link('factories', '供应商与工厂合作', '/supply/factories', ['admin']),

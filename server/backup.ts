@@ -56,6 +56,11 @@ const tables = [
   "quotation_deposits",
   "quotation_documents",
   "quotation_bundles",
+  "logistics_price_history",
+  "logistics_cost_rates",
+  "logistics_quote_sheets",
+  "logistics_evidence",
+  "logistics_imports",
   "pricing_sync_config",
   "pricing_fx_batches",
   "pricing_sync_runs",
@@ -164,13 +169,19 @@ export async function restore(
     )
       throw new Error("迁移版本与备份不一致，请使用对应版本代码恢复");
     for (const name of tables.filter(
-      (n) => !["settings","whatsapp_settings","quotation_settings","crm_document_class","crm_runtime_config","pricing_sync_config","crm_fulfillment_stage","crm_logistics_doc_type","crm_fulfillment_approvers","crm_fulfillment_policy","automation_rule"].includes(n),
+      (n) => !["settings","whatsapp_settings","quotation_settings","crm_document_class","crm_runtime_config","pricing_sync_config","crm_fulfillment_stage","crm_logistics_doc_type","crm_fulfillment_approvers","crm_fulfillment_policy","automation_rule","logistics_price_history"].includes(n),
     ))
       if ((await db.query(`SELECT 1 FROM ${name} LIMIT 1`)).rowCount)
         throw new Error(
           "恢复目标数据库不是空库，已拒绝覆盖。请新建独立恢复数据库。",
         );
     const counts: Record<string, number> = {};
+    // Only after the empty-target check. Restore exact history, not trigger-generated replay timestamps.
+    await db.query('ALTER TABLE quotation_products DISABLE TRIGGER logistics_product_history');
+    await db.query('ALTER TABLE quotation_freight DISABLE TRIGGER logistics_freight_history');
+    await db.query('ALTER TABLE quotation_settings DISABLE TRIGGER logistics_policy_history');
+    await db.query('ALTER TABLE logistics_price_history DISABLE TRIGGER logistics_history_immutable');
+    await db.query('DELETE FROM logistics_price_history');
     for (const name of tables) {
       const columns = new Map<string, string>(
         (
@@ -205,6 +216,10 @@ export async function restore(
       }
       counts[name] = rows.length;
     }
+    await db.query('ALTER TABLE quotation_products ENABLE TRIGGER logistics_product_history');
+    await db.query('ALTER TABLE quotation_freight ENABLE TRIGGER logistics_freight_history');
+    await db.query('ALTER TABLE quotation_settings ENABLE TRIGGER logistics_policy_history');
+    await db.query('ALTER TABLE logistics_price_history ENABLE TRIGGER logistics_history_immutable');
     return counts;
   });
 }

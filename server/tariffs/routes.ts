@@ -18,9 +18,10 @@ type Mutate = (
   res: Response,
   run: (db: pg.PoolClient) => Promise<unknown>,
 ) => Promise<void>;
+const tariffMaintainer=(actor:{role:string})=>{if(!['admin','coordinator'].includes(actor.role))throw new HttpError(403,'仅管理员与跟单员可核验税率');};
 export function registerTariffs(app: Express, pool: pg.Pool, mutate: Mutate) {
   app.use("/api/tariffs", (req, _res, next) => {
-    if (!["admin", "sales", "logistics"].includes(req.actor.role))
+    if (!["admin", "sales", "logistics","coordinator"].includes(req.actor.role))
       throw new HttpError(403, "无税率查询权限");
     next();
   });
@@ -158,7 +159,7 @@ export function registerTariffs(app: Express, pool: pg.Pool, mutate: Mutate) {
   );
   app.post("/api/tariffs/records", async (req, res) =>
     mutate(req, res, async (db) => {
-      requireAdmin(req.actor);
+      tariffMaintainer(req.actor);
       const i = tariffRecordInput.parse(req.body);
       if (["wits", "owid", "uk_bulk", "wco"].includes(i.sourceCode))
         throw new HttpError(
@@ -218,7 +219,7 @@ export function registerTariffs(app: Express, pool: pg.Pool, mutate: Mutate) {
   );
   app.post("/api/tariffs/records/:id/review", async (req, res) =>
     mutate(req, res, async (db) => {
-      requireAdmin(req.actor);
+      tariffMaintainer(req.actor);
       const i = z
         .object({
           version: z.number().int(),

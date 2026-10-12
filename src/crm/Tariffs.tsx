@@ -40,7 +40,7 @@ const stamp = (v: string | null) =>
     : "尚无记录";
 export default function Tariffs() {
   const { user, revision, refresh, notify } = useSession(),
-    admin = user.role === "admin";
+    admin = user.role === "admin",maintain=admin||user.role==='coordinator';
   const m = useMutation();
   const [tab, setTab] = useState("rates"),
     [search, setSearch] = useState(""),
@@ -56,7 +56,7 @@ export default function Tariffs() {
     true,
   );
   const d = r.data;
-  if (!["admin", "sales", "logistics"].includes(user.role))
+  if (!["admin", "sales", "logistics","coordinator"].includes(user.role))
     return <ErrorBox message="无税率查询权限" />;
   if (!d) return r.loading ? <Loading /> : <ErrorBox message={r.error} />;
   return (
@@ -203,7 +203,7 @@ export default function Tariffs() {
                           <strong>来源同步失败，旧数据保留</strong>
                         )}
                         <button onClick={() => setSelected(x)}>
-                          查看 / {admin ? "复核" : "依据"}
+                          查看 / {maintain ? "复核" : "依据"}
                         </button>
                       </td>
                     </tr>
@@ -252,7 +252,7 @@ export default function Tariffs() {
                   ? "参考数据不得直接转为可报价税率。请人工录入完整国家税则记录。"
                   : "修改使用新版本，不覆盖原记录。"}
               </p>
-              {admin && !selected.reference_only && (
+              {maintain && !selected.reference_only && (
                 <ReviewForm
                   key={selected.id}
                   row={selected}
@@ -265,7 +265,7 @@ export default function Tariffs() {
               <button onClick={() => setSelected(null)}>关闭详情</button>
             </Panel>
           )}
-          {admin && (
+          {maintain && (
             <ManualForm
               key={selected?.id || "new"}
               sources={d.sources}

@@ -7,20 +7,21 @@ import {pricingConfigSchema} from '../../shared/pricing.ts';
 import {quotationSettingsSchema,type Freight,type Product} from '../../shared/quoting.ts';
 import {requireAdmin,HttpError} from '../domain.ts';
 import {audit} from '../repository.ts';
-import {ECB_URL,addDays,day,effectiveSettings,nextRun,pricingState} from './sync.ts';
+import {addDays,day,effectiveSettings,nextRun,pricingState} from './sync.ts';
 import {approveImport,freightHeaders,productHeaders,readImport} from './imports.ts';
 import {policy} from '../quoting/engine.ts';
 type Mutate=(req:Request,res:Response,run:(db:pg.PoolClient)=>Promise<unknown>)=>Promise<void>;
+const importMaintainer=(role:string)=>{if(!['admin','coordinator'].includes(role))throw new HttpError(403,'仅管理员与跟单员可导入真实成本和运价');};
 export function priceStatus(validFrom:string|null,validUntil:string|null,ready:boolean,today=day()) {
  return validUntil&&validUntil<today?'已过期':!ready||!validFrom||validFrom>today||!validUntil?'待确认':'有效';
 }
 export function registerPricing(app:Express,pool:pg.Pool,mutate:Mutate) {
- app.use('/api/pricing', (req,_res,next)=>{if(!['admin','sales','logistics'].includes(req.actor.role))throw new HttpError(403,'无每日价格权限');next();});
+ app.use('/api/pricing', (req,_res,next)=>{if(!['admin','sales','logistics','coordinator'].includes(req.actor.role))throw new HttpError(403,'无每日价格权限');next();});
  app.get('/api/pricing/alerts/count',async(req,res)=>{requireAdmin(req.actor);res.json((await pool.query('SELECT count(*)::int AS count FROM pricing_alerts WHERE resolved_at IS NULL')).rows[0]);});
  app.get('/api/pricing/overview',async(req,res)=>{
   const stored=(await pool.query('SELECT data,version FROM quotation_settings WHERE id=1')).rows[0];
   const {settings,state,batch}=await effectiveSettings(pool,quotationSettingsSchema.parse(stored.data));
-  const reference=batch?Object.entries(batch.cny_rates as Record<string,number>).filter(([currency])=>currency!=='CNY').map(([currency,cnyPerUnit])=>({currency,cnyPerUnit,date:batch.source_date,validUntil:addDays(batch.source_date,state.data.referenceDays),source:'欧洲央行 ECB',sourceUrl:ECB_URL,type:'参考中间汇率（非现汇买入/卖出价）',batchId:batch.id,firstSyncedAt:batch.first_synced_at,status:priceStatus(batch.source_date,addDays(batch.source_date,state.data.referenceDays),true),syncFailed:!!state.last_error})):[];
+  const reference=batch?Object.entries(batch.cny_rates as Record<string,number>).filter(([currency])=>currency!=='CNY').map(([currency,cnyPerUnit])=>({currency,cnyPerUnit,date:batch.source_date,validUntil:addDays(batch.source_date,state.data.referenceDays),source:batch.source,sourceUrl:batch.source_url,type:'参考中间汇率（非现汇买入/卖出价）',batchId:batch.id,firstSyncedAt:batch.first_synced_at,status:priceStatus(batch.source_date,addDays(batch.source_date,state.data.referenceDays),true),syncFailed:!!state.last_error})):[];
   const company=Object.entries(settings.fx).map(([currency,r])=>({currency,...r,status:priceStatus(r.date,r.validUntil,true)}));
   const runs=(await pool.query('SELECT id,trigger,started_at,finished_at,status,attempts,batch_id,error FROM pricing_sync_runs ORDER BY started_at DESC LIMIT 12')).rows;
   const alerts=req.actor.role==='admin'?(await pool.query('SELECT id,message,created_at FROM pricing_alerts WHERE resolved_at IS NULL ORDER BY created_at DESC LIMIT 10')).rows:[];
@@ -47,23 +48,23 @@ export function registerPricing(app:Express,pool:pg.Pool,mutate:Mutate) {
   res.json({products:productRows,freight:freightRows});
  });
  app.get('/api/pricing/import-template/:kind',(req,res)=>{
-  requireAdmin(req.actor);const kind=z.enum(['product','freight']).parse(req.params.kind);
+  importMaintainer(req.actor.role);const kind=z.enum(['product','freight']).parse(req.params.kind);
   res.type('text/csv; charset=utf-8').attachment(`${kind}-prices.csv`).send('\uFEFF'+(kind==='product'?productHeaders:freightHeaders).join(',')+'\r\n');
  });
- app.get('/api/pricing/imports',async(req,res)=>{requireAdmin(req.actor);res.json((await pool.query('SELECT id,kind,name,provider,source_date::text,valid_from::text,valid_until::text,status,created_at,rows,review_note FROM pricing_imports ORDER BY created_at DESC LIMIT 30')).rows);});
+ app.get('/api/pricing/imports',async(req,res)=>{importMaintainer(req.actor.role);res.json((await pool.query('SELECT id,kind,name,provider,source_date::text,valid_from::text,valid_until::text,status,created_at,rows,review_note FROM pricing_imports ORDER BY created_at DESC LIMIT 30')).rows);});
  app.post('/api/pricing/imports',async(req,res)=>{
-  requireAdmin(req.actor);
+  importMaintainer(req.actor.role);
   const input=z.object({kind:z.enum(['product','freight']),name:z.string().min(1).max(200),provider:z.string().trim().min(1).max(200),sourceDate:dateSchema,validFrom:dateSchema,validUntil:dateSchema,data:z.string().max(2800000)}).parse(req.body);
   if(input.sourceDate>day()||input.validFrom>input.validUntil)throw new HttpError(422,'来源日期或有效期不正确');
   const bytes=Buffer.from(input.data,'base64'),rows=await readImport(bytes,input.name);
-  await mutate(req,res,async db=>{requireAdmin(req.actor);const id=randomUUID(),sha=createHash('sha256').update(bytes).digest('hex');
+  await mutate(req,res,async db=>{importMaintainer(req.actor.role);const id=randomUUID(),sha=createHash('sha256').update(bytes).digest('hex');
    const r=await db.query('INSERT INTO pricing_imports(id,kind,name,provider,source_date,valid_from,valid_until,file_sha256,file_bytes,rows,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(kind,file_sha256,provider,source_date,valid_from,valid_until) DO UPDATE SET file_sha256=excluded.file_sha256 RETURNING id,status',[id,input.kind,input.name,input.provider,input.sourceDate,input.validFrom,input.validUntil,sha,bytes,JSON.stringify(rows),req.actor.id]);
    await audit(db,req.actor,'导入价格文件待人工核对',r.rows[0].id,{sha256:sha,rows:rows.length});return r.rows[0];
   });
  });
- app.get('/api/pricing/imports/:id/file',async(req,res)=>{requireAdmin(req.actor);const r=(await pool.query('SELECT name,file_bytes FROM pricing_imports WHERE id=$1',[z.uuid().parse(req.params.id)])).rows[0];if(!r)throw new HttpError(404,'文件不存在');res.type('application/octet-stream').attachment(r.name).send(r.file_bytes);});
+ app.get('/api/pricing/imports/:id/file',async(req,res)=>{importMaintainer(req.actor.role);const r=(await pool.query('SELECT name,file_bytes FROM pricing_imports WHERE id=$1',[z.uuid().parse(req.params.id)])).rows[0];if(!r)throw new HttpError(404,'文件不存在');res.type('application/octet-stream').attachment(r.name).send(r.file_bytes);});
  app.post('/api/pricing/imports/:id/review',async(req,res)=>mutate(req,res,async db=>{
-  requireAdmin(req.actor);const id=z.uuid().parse(req.params.id),input=z.object({approve:z.boolean(),note:z.string().trim().min(5).max(1000)}).parse(req.body);
+  importMaintainer(req.actor.role);const id=z.uuid().parse(req.params.id),input=z.object({approve:z.boolean(),note:z.string().trim().min(5).max(1000)}).parse(req.body);
   const result=input.approve?await approveImport(db,id,req.actor.id,input.note):{rejected:(await db.query("UPDATE pricing_imports SET status='rejected',reviewed_at=now(),reviewed_by=$2,review_note=$3 WHERE id=$1 AND status='pending'",[id,req.actor.id,input.note])).rowCount};
   await audit(db,req.actor,input.approve?'核准真实价格导入':'驳回价格导入',id,{note:input.note});return result;
  }));

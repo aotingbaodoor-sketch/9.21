@@ -198,8 +198,8 @@ export function registerSettlement(
         w.id,
       ]),
       pool.query(
-        "SELECT * FROM crm_fulfillment_stage WHERE ordinal=(SELECT ordinal+1 FROM crm_fulfillment_stage WHERE code=$1)",
-        [w.current_stage],
+        "SELECT s.* FROM crm_fulfillment_stage s JOIN crm_order_progress p ON p.stage_code=s.code AND p.work_order_id=$2 WHERE s.ordinal>(SELECT ordinal FROM crm_fulfillment_stage WHERE code=$1) AND p.is_applicable ORDER BY s.ordinal LIMIT 1",
+        [w.current_stage,w.id],
       ),
     ]);
     const s = await settlement(pool, w.id);
@@ -522,15 +522,13 @@ export function registerSettlement(
         throw new HttpError(422, "实际发生时间不能在未来");
       const next = (
         await db.query(
-          "SELECT code FROM crm_fulfillment_stage WHERE ordinal=(SELECT ordinal+1 FROM crm_fulfillment_stage WHERE code=$1)",
-          [w.current_stage],
+          "SELECT s.code FROM crm_fulfillment_stage s JOIN crm_order_progress p ON p.stage_code=s.code AND p.work_order_id=$2 WHERE s.ordinal>(SELECT ordinal FROM crm_fulfillment_stage WHERE code=$1) AND p.is_applicable ORDER BY s.ordinal LIMIT 1",
+          [w.current_stage,w.id],
         )
       ).rows[0];
       if (next?.code !== i.stage)
         throw new HttpError(409, "必须顺序核实节点，禁止跳级或倒退");
       await validProjectFile(db, i.fileId, w.project_id);
-      if (w.trade_term !== "FOB")
-        throw new HttpError(409, "EXW适用性待确认，未自动跳过");
       if (["production_done", "shipment_checked"].includes(i.stage)) {
         const purchases = (
           await db.query(

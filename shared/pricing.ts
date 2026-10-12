@@ -8,7 +8,7 @@ export const pricingConfigSchema=z.object({
 export type PricingConfig=z.infer<typeof pricingConfigSchema>;
 export const provenanceSchema=z.object({
  provider:z.string().trim().min(1).max(200), sourceDate:dateSchema, validFrom:dateSchema,
- importedAt:z.iso.datetime(), importId:z.uuid(), method:z.literal('manual_import'),
+ importedAt:z.iso.datetime(), importId:z.uuid().nullable(), method:z.enum(['manual_import','manual']),evidence:z.string().max(1000).optional(),
  approvedAt:z.iso.datetime(), note:z.string().max(1000),
 });
 export const freightLimitsSchema=z.object({minCbm:z.number().min(0).nullable(),maxCbm:z.number().positive().nullable(),minKg:z.number().min(0).nullable(),maxKg:z.number().positive().nullable()});
