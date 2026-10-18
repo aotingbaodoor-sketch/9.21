@@ -1,0 +1,13 @@
+-- Incremental CAD workspace. All originals, attempts, revisions and reviews are retained.
+CREATE TABLE cad_projects(project_id uuid PRIMARY KEY REFERENCES quotation_projects(id),enabled boolean NOT NULL DEFAULT true,created_by uuid NOT NULL REFERENCES users(id),created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE cad_sources(id uuid PRIMARY KEY,project_id uuid NOT NULL REFERENCES cad_projects(project_id),name text NOT NULL,format text NOT NULL CHECK(format IN ('dxf','dwg','pdf','png','jpg')),sha256 text NOT NULL,original_base64 text NOT NULL,created_by uuid NOT NULL REFERENCES users(id),created_at timestamptz NOT NULL DEFAULT now(),UNIQUE(project_id,sha256));
+CREATE TABLE cad_analysis(id uuid PRIMARY KEY,source_id uuid NOT NULL REFERENCES cad_sources(id),engine text NOT NULL,status text NOT NULL CHECK(status IN ('analyzed','manual','failed','unsupported')),result jsonb NOT NULL,error text,created_by uuid NOT NULL REFERENCES users(id),created_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX cad_analysis_source_idx ON cad_analysis(source_id,created_at DESC);
+CREATE TABLE cad_versions(id uuid PRIMARY KEY,project_id uuid NOT NULL REFERENCES cad_projects(project_id),source_id uuid NOT NULL REFERENCES cad_sources(id),tc_id uuid NOT NULL REFERENCES technical_confirmation(id),version integer NOT NULL CHECK(version>0),parameters jsonb NOT NULL,technical_snapshot jsonb NOT NULL,output jsonb NOT NULL,issues jsonb NOT NULL,reason text NOT NULL,created_by uuid NOT NULL REFERENCES users(id),created_at timestamptz NOT NULL DEFAULT now(),UNIQUE(project_id,version));
+CREATE TABLE cad_reviews(id uuid PRIMARY KEY,version_id uuid NOT NULL REFERENCES cad_versions(id),decision text NOT NULL CHECK(decision IN ('approved_draft','rejected','withdrawn')),note text NOT NULL,reviewed_by uuid NOT NULL REFERENCES users(id),created_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX cad_review_version_idx ON cad_reviews(version_id,created_at DESC);
+CREATE TABLE cad_mo_links(id uuid PRIMARY KEY,version_id uuid NOT NULL REFERENCES cad_versions(id),mo_draft_id uuid NOT NULL REFERENCES crm_manufacturing_drafts(id),linked_by uuid NOT NULL REFERENCES users(id),created_at timestamptz NOT NULL DEFAULT now(),UNIQUE(version_id,mo_draft_id));
+DO $$ DECLARE t text; BEGIN FOREACH t IN ARRAY ARRAY['cad_projects','cad_sources','cad_analysis','cad_versions','cad_reviews','cad_mo_links'] LOOP
+ EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY',t);
+ EXECUTE format('CREATE TRIGGER %I BEFORE UPDATE OR DELETE ON %I FOR EACH ROW EXECUTE FUNCTION crm_keep_document_registry()',t||'_immutable',t);
+END LOOP; END $$;

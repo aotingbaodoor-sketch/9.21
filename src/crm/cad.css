@@ -1,0 +1,52 @@
+.cad-viewer {
+  border: 1px solid #ddd;
+  padding: 16px;
+  margin: 16px 0;
+}
+.cad-viewer > label {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  margin: 4px 12px 4px 0;
+}
+.cad-canvas {
+  overflow: auto;
+  max-height: 560px;
+  min-height: 180px;
+  background: #eef0f3;
+  border: 1px solid #ddd;
+}
+.cad-canvas img {
+  display: block;
+  background: white;
+  min-width: 260px;
+}
+.cad-table {
+  max-height: 360px;
+  overflow: auto;
+}
+.cad-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.cad-table td,
+.cad-table th {
+  border-bottom: 1px solid #ddd;
+  padding: 8px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.cad-viewer input[type="range"] {
+  width: 150px;
+}
+@media (max-width: 700px) {
+  .cad-viewer {
+    padding: 8px;
+  }
+  .cad-canvas {
+    max-height: 380px;
+  }
+  .cad-table {
+    font-size: 12px;
+  }
+}

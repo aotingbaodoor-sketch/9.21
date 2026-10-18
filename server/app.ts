@@ -50,6 +50,7 @@ import {registerTariffs} from './tariffs/routes.ts';
 import {registerLogistics} from './logistics/routes.ts';
 import {registerTechnical} from './technical.ts';
 import {registerTechnicalDrawings} from './technical-drawings.ts';
+import {registerCad} from './cad.ts';
 
 declare global {
   namespace Express {
@@ -294,6 +295,7 @@ export function createApp(pool: pg.Pool, options: Options) {
   registerLogistics(app,pool,mutate);
   registerTechnical(app,pool,mutate);
   registerTechnicalDrawings(app,pool,mutate);
+  registerCad(app,pool,mutate);
   registerNumbering(app,pool,mutate);
   registerCustomerIdentity(app,pool,mutate);
   app.get("/api/customers", async (req, res) =>

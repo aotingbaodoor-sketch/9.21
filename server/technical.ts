@@ -24,6 +24,7 @@ import { technicalHtml, renderHtmlPdf } from "./supply/manufacturing-export.ts";
 import { escapeXml as escape } from "../shared/drawing.ts";
 import {latestTcDrawings,linkTcDrawings} from './technical-drawings.ts';
 import {rasterPdf} from './drawing-raster.ts';
+import {requireCadProduction} from './cad.ts';
 type Mutate = (
   req: Request,
   res: Response,
@@ -713,6 +714,7 @@ export function registerTechnical(app: Express, pool: pg.Pool, mutate: Mutate) {
       }
       await privacy(db, t, { technical, production });
       await latestTcDrawings(db,t.id,technical.items.map(i=>i.lineKey));
+      await requireCadProduction(db,t.project_id);
       const id = randomUUID(),
         partyA = {
           name: req.actor.name,
