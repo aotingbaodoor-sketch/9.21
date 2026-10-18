@@ -10,6 +10,7 @@ import { registerDocumentInTransaction } from "../document-registry.ts";
 import { purchaseOrder } from "./access.ts";
 import {safeManufacturing} from '../technical.ts';
 import {moDrawingPages} from '../technical-drawings.ts';
+import {requireCadProduction} from '../cad.ts';
 import {
   manufacturingExcel,
   manufacturingPdf,
@@ -520,6 +521,11 @@ export function registerOrderChain(
       // Allow-list projection, including for administrators: this endpoint IS the factory version.
       let drawings:Awaited<ReturnType<typeof moDrawingPages>>=[],drawingError='';
       try{drawings=await moDrawingPages(pool,m);}catch(e){if(!(e instanceof HttpError)||e.status!==409)throw e;drawingError=e.message;if(req.actor.role==='factory'||req.params.format)throw e;}
+      const cadRequired=!!(await pool.query('SELECT 1 FROM cad_projects p JOIN technical_confirmation t ON t.project_id=p.project_id WHERE t.id=$1 AND p.enabled',[m.source_tc_id])).rowCount;
+      if(cadRequired){
+        const t=(await pool.query('SELECT project_id FROM technical_confirmation WHERE id=$1',[m.source_tc_id])).rows[0];
+        try{await requireCadProduction(pool,t.project_id,m.source_tc_id,m.draft_id);}catch(e){if(!(e instanceof HttpError)||e.status!==409)throw e;drawingError=e.message;if(req.actor.role==='factory'||req.params.format)throw e;}
+      }
       const view = {
         id: m.id,
         docNo: m.doc_no,
@@ -533,6 +539,7 @@ export function registerOrderChain(
         warranty: [],
         drawingError,
         drawings:drawings.map(d=>({id:d.id,label:d.label,version:d.version})),
+        cadRequired,
       };
       if (req.params.format) {
         const format = z.enum(["pdf", "xlsx"]).parse(req.params.format);

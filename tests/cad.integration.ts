@@ -9,9 +9,10 @@ import { localPostgres } from "../scripts/postgres-runtime.ts";
 import { database, migrate } from "../server/db.ts";
 import { createApp } from "../server/app.ts";
 import { hashPassword } from "../server/domain.ts";
-import { tcFieldsSchema, tcBusinessSchema } from "../shared/technical.ts";
+import { tcFieldsSchema, tcBusinessSchema,TC_FIELDS } from "../shared/technical.ts";
 import { requireCadProduction } from "../server/cad.ts";
 import type { Server } from "node:http";
+import {PDFDocument} from 'pdf-lib';
 const root = mkdtempSync(path.join(os.tmpdir(), "autinberg-cad-test-")),
   password = randomBytes(32).toString("hex"),
   origin = "http://127.0.0.1:4638";
@@ -73,7 +74,7 @@ try {
   await local.createDatabase("cad_test");
   await migrate(pool);
   await migrate(pool);
-  pass("030增量迁移及重复迁移");
+  pass("031增量迁移及重复迁移");
   const ids = {
     admin: randomUUID(),
     sales: randomUUID(),
@@ -139,6 +140,7 @@ try {
           heightMm: 2000,
           quantity: 2,
           fields: tcFieldsSchema.parse({
+            ...(kind==='window'?Object.fromEntries(Object.keys(TC_FIELDS).map(k=>[k,'ISOLATED TEST '+k])):{}),
             material: "TEST aluminium",
             finalHardware: "TEST upgraded hardware",
           }),
@@ -206,6 +208,14 @@ try {
         reason: "ISOLATED first draft",
       },
       key = randomUUID();
+    let productionFiles:any;
+    if(kind==='window'){
+      const upload=async(name:string,data:string)=>ok(admin,`/supply/cad/projects/${project.id}/sources`,{name,data,enableDrafting:true});
+      const final=await upload('completed-test.dxf',readFileSync(path.join(output,'completed-test.dxf')).toString('base64'));
+      const basis=await upload('ISOLATED-basis.pdf',readFileSync(path.join(output,'native-pdf.pdf')).toString('base64'));
+      const handles=JSON.parse(readFileSync(path.join(output,'fixture-handles.json'),'utf8'));
+      productionFiles={drawingSourceId:final.id,profileSourceId:basis.id,nodeSourceId:basis.id,toleranceSourceId:basis.id,inspectionSourceId:basis.id,report:[{lineKey:'TEST-01',widthEntityId:handles[0],heightEntityId:handles[1],drawingEvidence:'ISOLATED test entity checks only',dimensions:true,materials:true,quantity:true,configuration:true}],note:'ISOLATED basis and inspection evidence ONLY - not real production'};
+    }
     assert.equal(
       (
         await req(admin, `/supply/cad/projects/${project.id}/versions`, {
@@ -253,6 +263,9 @@ try {
       ).status,
       403,
     );
+    assert.equal((await req(admin,`/supply/cad/versions/${v.id}/review`,{decision:'approved_draft',note:'not submitted',dimensionsChecked:true,privacyChecked:true})).status,409);
+    await ok(actors.sales,`/supply/cad/versions/${v.id}/submit`,{});
+    assert.equal((await ok(admin,`/supply/cad/versions/${v.id}`)).state,'submitted');
     await ok(admin, `/supply/cad/versions/${v.id}/review`, {
       decision: "approved_draft",
       note: "ISOLATED reviewed, not production",
@@ -265,7 +278,33 @@ try {
     const dxf = await ok(admin, `/supply/cad/versions/${v.id}/export/dxf`);
     assert.equal(dxf.toString().includes("ISOLATED PRIVATE"), false);
     writeFileSync(path.join(output, kind + "-draft.dxf"), dxf);
-    await assert.rejects(requireCadProduction(pool, project.id), /公司批准/);
+    await assert.rejects(requireCadProduction(pool, project.id), /生产批准图/);
+    assert.equal((await ok(admin,`/supply/cad/versions/${v.id}`)).state,'reviewed');
+    assert.equal((await req(actors.sales,`/supply/cad/versions/${v.id}/approve-production`,{note:'no authority to approve production'})).status,403);
+    const missing=await req(admin,`/supply/cad/versions/${v.id}/approve-production`,{note:'ISOLATED missing production evidence'});
+    assert.equal(missing.status,409);assert.match(missing.data.error,/独立CAD验收/);
+    assert.equal((await req(admin,`/supply/cad/versions/${v.id}/approved/dxf`)).status,409);
+    if(kind==='window'){
+      const wrong=structuredClone(productionFiles);wrong.report[0].widthEntityId=wrong.report[0].heightEntityId;
+      assert.equal((await req(admin,`/supply/cad/versions/${v.id}/production-packet`,wrong)).status,409);
+      await ok(admin,`/supply/cad/versions/${v.id}/production-packet`,productionFiles);
+      assert.equal((await ok(admin,`/supply/cad/versions/${v.id}`)).state,'draft');
+      await ok(admin,`/supply/cad/versions/${v.id}/submit`,{});
+      await ok(admin,`/supply/cad/versions/${v.id}/review`,{decision:'approved_draft',note:'ISOLATED packet reviewed',dimensionsChecked:true,privacyChecked:true});
+      const unsigned=await req(admin,`/supply/cad/versions/${v.id}/approve-production`,{note:'ISOLATED only approval attempt'});assert.equal(unsigned.status,409);assert.match(unsigned.data.error,/签字/);
+      const signed=await PDFDocument.create();signed.addPage().drawText('ISOLATED SIGNATURE FIXTURE - NOT REAL CUSTOMER');
+      const signfile=await ok(admin,`/quoting/projects/${project.id}/files`,{name:'ISOLATED-confirmation.pdf',mime:'application/pdf',data:Buffer.from(await signed.save()).toString('base64'),kind:'confirmation'});
+      await ok(admin,`/supply/technical/${t.id}/confirm`,{fileId:signfile.id,signerName:'ISOLATED fictional test signer',signedOn:new Date().toISOString().slice(0,10),verified:true});
+      await ok(admin,`/supply/cad/versions/${v.id}/approve-production`,{note:'ISOLATED only; not a real production approval'});
+      assert.equal((await ok(admin,`/supply/cad/versions/${v.id}`)).state,'production_approved');
+      const released=await ok(admin,`/supply/cad/versions/${v.id}/approved/dxf`);
+      assert.equal(released.toString().includes('PRIVATE_METADATA_MUST_BE_REMOVED'),false);
+      assert.equal((await req(actors.other,`/supply/cad/versions/${v.id}/approved/dxf`)).status,404);
+      assert.equal((await req(actors.factory,`/supply/cad/versions/${v.id}/approved/dxf`)).status,404);
+      await ok(admin,`/supply/cad/versions/${v.id}/void`,{note:'ISOLATED revoke'});
+      assert.equal((await req(admin,`/supply/cad/versions/${v.id}/approved/dxf`)).status,409);
+      pass('生产资料逐项几何核对、缺签字阻止、权限隔离、生产批准与撤回下载门禁（隔离样本）');
+    }
     pass(kind + ": 上传分析→参数→DXF/PDF→草稿审核、幂等、权限及投产阻止");
     if (kind === "door") {
       const changed = structuredClone(input);
@@ -312,6 +351,8 @@ try {
         409,
       );
       pass("TC尺寸差异、新版作废旧审核资格、撤回停止下载");
+      await ok(admin,`/supply/cad/versions/${v.id}/void`,{note:'Can revoke a superseded version'});
+      assert.equal((await ok(admin,`/supply/cad/versions/${v.id}`)).state,'void');
       const fail = await ok(
         admin,
         `/supply/cad/projects/${project.id}/sources`,

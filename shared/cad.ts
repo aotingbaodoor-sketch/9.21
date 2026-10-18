@@ -5,7 +5,14 @@ import {
   type TcTechnical,
 } from "./technical.ts";
 import { escapeXml } from "./drawing.ts";
-export const CAD_ENGINE = "cad-v1-ezdxf-1.4.5";
+export const CAD_ENGINE = "cad-v2-native-pdf-libredwg-0.13.3";
+export const CAD_STATES: Record<string, string> = {
+  draft: "深化草稿",
+  submitted: "待审核",
+  reviewed: "已审核",
+  production_approved: "已批准生产",
+  void: "已作废",
+};
 export const CAD_LIMITATIONS =
   "本轮生成外框立面、可选深度平面、尺寸及材料说明；剖面、固定方式、承载及玻璃选型须公司认可节点库和技术人员确认。所有生成图均为深化草稿，不能投产。";
 const dimension = z.number().positive().max(100000).nullable();

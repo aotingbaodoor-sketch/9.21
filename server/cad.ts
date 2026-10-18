@@ -16,6 +16,11 @@ import {
 import { renderHtmlPdf } from "./supply/manufacturing-export.ts";
 import { escapeXml } from "../shared/drawing.ts";
 import type { Db } from "./db.ts";
+import {
+  cadState,
+  registerCadRelease,
+  requireProductionDrawing,
+} from "./cad-release.ts";
 type Mutate = (
   req: Request,
   res: Response,
@@ -48,7 +53,7 @@ async function revision(db: Db, actor: any, key: string) {
   await tcProject(db, actor, v.project_id);
   return v;
 }
-async function current(db: Db, v: any) {
+export async function current(db: Db, v: any) {
   if (
     (
       await db.query(
@@ -75,7 +80,12 @@ async function current(db: Db, v: any) {
   ).rowCount;
   if (newer) throw new HttpError(409, "TC已升版，请基于新TC重新生成和审核");
 }
-export async function requireCadProduction(db: Db, projectId: string) {
+export async function requireCadProduction(
+  db: Db,
+  projectId: string,
+  tcId?: string,
+  draftId?: string,
+) {
   if (
     (
       await db.query(
@@ -84,12 +94,21 @@ export async function requireCadProduction(db: Db, projectId: string) {
       )
     ).rowCount
   )
-    throw new HttpError(
-      409,
-      "CAD深化项目尚无公司批准的生产节点模板与生产批准图。当前仅可导出深化草稿；请完成工程深化及生产图验收，不得绕过客户签认、G-44/G-46。",
-    );
+    await requireProductionDrawing(db, projectId, tcId, draftId);
 }
 export function registerCad(app: Express, pool: pg.Pool, mutate: Mutate) {
+  registerCadRelease(app, pool, mutate);
+  app.get("/api/supply/cad/sources/:id/progress", async (req, res) => {
+    const s = await source(pool, req.actor, id.parse(req.params.id));
+    res.json(
+      (
+        await pool.query(
+          "SELECT phase,attempt,started_at,finished_at,error,(finished_at IS NULL AND started_at<now()-interval '3 minutes') interrupted FROM cad_analysis_progress WHERE source_id=$1",
+          [s.id],
+        )
+      ).rows[0] || null,
+    );
+  });
   app.get("/api/supply/cad/projects/:id", async (req, res) => {
     role(req.actor);
     const p = await tcProject(pool, req.actor, id.parse(req.params.id));
@@ -145,6 +164,9 @@ export function registerCad(app: Express, pool: pg.Pool, mutate: Mutate) {
       )
         throw new HttpError(422, "不是可识别的DWG文件头");
       const sha = createHash("sha256").update(bytes).digest("hex");
+      await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
+        "cad-project:" + p.id,
+      ]);
       await db.query(
         "INSERT INTO cad_projects(project_id,created_by) VALUES($1,$2) ON CONFLICT DO NOTHING",
         [p.id, req.actor.id],
@@ -186,6 +208,13 @@ export function registerCad(app: Express, pool: pg.Pool, mutate: Mutate) {
       name: s.name,
       format: s.format,
       analysis: a || null,
+      progress:
+        (
+          await pool.query(
+            "SELECT phase,attempt,started_at,finished_at,error,(finished_at IS NULL AND started_at<now()-interval '3 minutes') interrupted FROM cad_analysis_progress WHERE source_id=$1",
+            [s.id],
+          )
+        ).rows[0] || null,
     });
   });
   app.get("/api/supply/cad/sources/:id/download", async (req, res) => {
@@ -212,6 +241,10 @@ export function registerCad(app: Express, pool: pg.Pool, mutate: Mutate) {
         )
       ).rows[0];
       if (cached) return { ...cached, cached: true };
+      await pool.query(
+        "INSERT INTO cad_analysis_progress(source_id,phase) VALUES($1,'开始分析') ON CONFLICT(source_id) DO UPDATE SET phase='开始分析',attempt=cad_analysis_progress.attempt+1,started_at=now(),finished_at=NULL,error=NULL",
+        [s.id],
+      );
       let result: any = {},
         status = "failed",
         error = null;
@@ -219,6 +252,12 @@ export function registerCad(app: Express, pool: pg.Pool, mutate: Mutate) {
         result = await analyzeCad(
           Buffer.from(s.original_base64, "base64"),
           s.format,
+          async (phase) => {
+            await pool.query(
+              "UPDATE cad_analysis_progress SET phase=$2 WHERE source_id=$1",
+              [s.id, phase],
+            );
+          },
         );
         status = result.status;
       } catch (e) {
@@ -238,6 +277,18 @@ export function registerCad(app: Express, pool: pg.Pool, mutate: Mutate) {
           JSON.stringify(result),
           error,
           req.actor.id,
+        ],
+      );
+      await db.query(
+        "UPDATE cad_analysis_progress SET phase=$2,finished_at=now(),error=$3 WHERE source_id=$1",
+        [
+          s.id,
+          status === "failed"
+            ? "分析失败，可重试"
+            : status === "unsupported"
+              ? "格式暂不支持"
+              : "分析完成（参数待人工确认）",
+          error,
         ],
       );
       return { id: key, status, error };
@@ -347,6 +398,7 @@ export function registerCad(app: Express, pool: pg.Pool, mutate: Mutate) {
     } catch (e) {
       staleReason = e instanceof Error ? e.message : "版本失效";
     }
+    const state = await cadState(pool, v.id);
     res.json({
       ...v,
       output: { analysis: v.output.analysis },
@@ -354,6 +406,7 @@ export function registerCad(app: Express, pool: pg.Pool, mutate: Mutate) {
       moDrafts,
       staleReason,
       previousParameters: previous?.parameters || null,
+      state,
     });
   });
   app.post("/api/supply/cad/versions/:id/review", async (req, res) =>
@@ -364,6 +417,8 @@ export function registerCad(app: Express, pool: pg.Pool, mutate: Mutate) {
         "cad-project:" + v.project_id,
       ]);
       await current(db, v);
+      if ((await cadState(db, v.id)) === "void")
+        throw new HttpError(409, "已作废图纸不能重新审核，请创建新版本");
       const b = z
         .object({
           decision: z.enum(["approved_draft", "rejected", "withdrawn"]),
@@ -381,6 +436,11 @@ export function registerCad(app: Express, pool: pg.Pool, mutate: Mutate) {
           409,
           "请核对全部尺寸和隐私，并解决TC技术差异后再审核",
         );
+      if (
+        b.decision === "approved_draft" &&
+        (await cadState(db, v.id)) !== "submitted"
+      )
+        throw new HttpError(409, "请先提交审核；生产资料更新后需要重新提交");
       await db.query(
         "INSERT INTO cad_reviews(id,version_id,decision,note,reviewed_by) VALUES($1,$2,$3,$4,$5)",
         [randomUUID(), v.id, b.decision, b.note, req.actor.id],
@@ -392,6 +452,20 @@ export function registerCad(app: Express, pool: pg.Pool, mutate: Mutate) {
         v.id,
         b,
       );
+      await db.query(
+        "INSERT INTO cad_lifecycle(id,version_id,state,note,actor_id) VALUES($1,$2,$3,$4,$5)",
+        [
+          randomUUID(),
+          v.id,
+          b.decision === "approved_draft"
+            ? "reviewed"
+            : b.decision === "withdrawn"
+              ? "void"
+              : "draft",
+          b.note,
+          req.actor.id,
+        ],
+      );
       return { ok: true };
     }),
   );
@@ -399,6 +473,9 @@ export function registerCad(app: Express, pool: pg.Pool, mutate: Mutate) {
     mutate(req, res, async (db) => {
       role(req.actor, true);
       const v = await revision(db, req.actor, id.parse(req.params.id));
+      await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
+        "cad-project:" + v.project_id,
+      ]);
       await current(db, v);
       const b = z.object({ moDraftId: id }).parse(req.body),
         m = (
@@ -417,13 +494,19 @@ export function registerCad(app: Express, pool: pg.Pool, mutate: Mutate) {
           [v.id],
         )
       ).rows[0];
-      if (r?.decision !== "approved_draft")
-        throw new HttpError(409, "先完成技术草稿审核");
+      if (
+        r?.decision !== "approved_draft" ||
+        (await cadState(db, v.id)) !== "production_approved"
+      )
+        throw new HttpError(
+          409,
+          "先完成技术审核及生产批准；草稿不能作为MO生产图",
+        );
       await db.query(
         "INSERT INTO cad_mo_links(id,version_id,mo_draft_id,linked_by) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
         [randomUUID(), v.id, m.id, req.actor.id],
       );
-      await repo.audit(db, req.actor, "关联MO深化草稿（禁止生产外发）", m.id, {
+      await repo.audit(db, req.actor, "关联MO生产批准图（不自动下达）", m.id, {
         cadVersion: v.id,
       });
       return { ok: true };
@@ -440,7 +523,7 @@ export function registerCad(app: Express, pool: pg.Pool, mutate: Mutate) {
         [v.id],
       )
     ).rows[0];
-    if (r?.decision === "withdrawn")
+    if (r?.decision === "withdrawn" || (await cadState(pool, v.id)) === "void")
       throw new HttpError(409, "该版本已撤回，下载已停止");
     res
       .set("Cache-Control", "private, no-store")

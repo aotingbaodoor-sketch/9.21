@@ -17,3 +17,5 @@ docs/qa
 *.log
 *.pem
 *.key
+**/__pycache__
+**/*.pyc

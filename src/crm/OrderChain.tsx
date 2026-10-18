@@ -590,6 +590,7 @@ export function ManufacturingView() {
         </a>
       </p>
       <h3>已审核生产图纸</h3><ErrorBox message={d.drawingError||m.error}/>
+      {d.cadRequired&&!d.drawingError&&<p><a href={`/api/supply/cad/manufacturing/${id}/download/dxf`}>下载批准生产CAD</a> · <a href={`/api/supply/cad/manufacturing/${id}/download/pdf`}>下载批准生产图PDF</a></p>}
       {d.drawings?.map((x:any)=><p key={x.id}><a href={`/api/supply/manufacturing/${id}/drawings/${x.id}/download`}>{x.label} · 下载工厂版</a></p>)}
       {!d.drawings?.length&&!d.drawingError&&<p>此MO未关联技术图纸；未提供未经审核的原文件。</p>}
       {['admin','technical'].includes(user.role)&&<><Link to="/technical">到TC页面处理图纸脱敏审核</Link><p><button disabled={m.busy||d.changeRequired} onClick={()=>void m.run(`/supply/manufacturing/${id}/drawings/link`,'POST',{},()=>setRev(n=>n+1))}>关联最新已审副本到此MO</button></p></>}

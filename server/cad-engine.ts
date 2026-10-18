@@ -1,7 +1,7 @@
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, stat, rm } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { rasterOriginal } from "./drawing-raster.ts";
@@ -19,7 +19,15 @@ export async function cadWorker(action: string, data: unknown): Promise<any> {
         {
           stdio: ["pipe", "pipe", "pipe"],
           windowsHide: true,
-          env: { PATH:process.env.PATH, SystemRoot:process.env.SystemRoot, WINDIR:process.env.WINDIR, TEMP:process.env.TEMP,TMP:process.env.TMP,LANG:'C.UTF-8',PYTHONIOENCODING:'utf-8' },
+          env: {
+            PATH: process.env.PATH,
+            SystemRoot: process.env.SystemRoot,
+            WINDIR: process.env.WINDIR,
+            TEMP: process.env.TEMP,
+            TMP: process.env.TMP,
+            LANG: "C.UTF-8",
+            PYTHONIOENCODING: "utf-8",
+          },
         },
       );
       let text = "",
@@ -29,7 +37,8 @@ export async function cadWorker(action: string, data: unknown): Promise<any> {
         if (done) return;
         done = true;
         clearTimeout(timer);
-        if (error) reject(error); else resolve(value);
+        if (error) reject(error);
+        else resolve(value);
       };
       const timer = setTimeout(() => {
         child.kill();
@@ -59,7 +68,10 @@ export async function cadWorker(action: string, data: unknown): Promise<any> {
             finish(
               new HttpError(
                 422,
-                "CAD解析失败，请检查文件完整性或另存UTF-8 ASCII DXF",
+                typeof result.error === "string" &&
+                  result.error.startsWith("生产图：")
+                  ? result.error
+                  : "图纸解析失败：请检查文件是否加密/损坏；PDF上限30页，复杂CAD请分图上传。原件保留，可重试。",
               ),
             );
           else finish(undefined, result);
@@ -73,15 +85,77 @@ export async function cadWorker(action: string, data: unknown): Promise<any> {
     active--;
   }
 }
-export async function analyzeCad(bytes: Buffer, format: string): Promise<any> {
-  if (format === "dwg")
-    return {
-      status: "unsupported",
-      format,
-      warnings: [
-        "DWG原件已保留。本服务器未安装已授权DWG转换器；请从原CAD软件另存DXF后上传，不会改扩展名伪装转换。",
-      ],
-    };
+export async function analyzeCad(
+  bytes: Buffer,
+  format: string,
+  progress: (phase: string) => Promise<void> = async () => {},
+): Promise<any> {
+  await progress(
+    format === "dwg"
+      ? "转换DWG"
+      : format === "pdf"
+        ? "提取PDF原生文字及矢量"
+        : "解析原图",
+  );
+  if (format === "dwg") {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "autinberg-dwg-"));
+    try {
+      await writeFile(path.join(dir, "original.dwg"), bytes, { mode: 0o600 });
+      try {
+        await promisify(execFile)(
+          process.env.CAD_DWG_CONVERTER || "dwg2dxf",
+          [
+            "-v0",
+            "-o",
+            path.join(dir, "converted.dxf"),
+            path.join(dir, "original.dwg"),
+          ],
+          {
+            cwd: dir,
+            timeout: 20000,
+            maxBuffer: 128 * 1024,
+            windowsHide: true,
+            env: {
+              PATH: process.env.PATH,
+              SystemRoot: process.env.SystemRoot,
+              TEMP: dir,
+              TMP: dir,
+            },
+          },
+        );
+      } catch (e: any) {
+        if (e.code === "ENOENT")
+          return {
+            status: "unsupported",
+            format,
+            warnings: [
+              "DWG转换器未安装；请管理员检查LibreDWG部署，或从原CAD软件另存DXF。原件已保留。",
+            ],
+          };
+        throw new HttpError(
+          422,
+          "DWG转换失败或包含不支持对象；请用原CAD软件另存DXF后重试。未把不完整转换标为成功。",
+        );
+      }
+      if ((await stat(path.join(dir, "converted.dxf"))).size > 12 * 1024 * 1024)
+        throw new HttpError(422, "转换后DXF超过12MB，请分图上传");
+      const result = await cadWorker(
+        "analyze",
+        (await readFile(path.join(dir, "converted.dxf"))).toString("base64"),
+      );
+      return {
+        ...result,
+        format: "dwg",
+        conversion: "LibreDWG 0.13.3 → DXF",
+        warnings: [
+          "DWG基础二维内容转换；动态/代理/三维对象可能不完整，须对照原CAD确认，不能仅凭转换成功批准生产。",
+          ...result.warnings,
+        ],
+      };
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
   if (format === "dxf") return cadWorker("analyze", bytes.toString("base64"));
   const mime =
     format === "pdf"
@@ -89,14 +163,19 @@ export async function analyzeCad(bytes: Buffer, format: string): Promise<any> {
       : format === "png"
         ? "image/png"
         : "image/jpeg";
-  const pages = await rasterOriginal(bytes, mime);
+  const native =
+    format === "pdf" ? await cadWorker("pdf", bytes.toString("base64")) : null;
+  const pages = native?.pages || (await rasterOriginal(bytes, mime));
   const dir = await mkdtemp(path.join(os.tmpdir(), "autinberg-cad-"));
-  const evidence: any[] = [];
+  const evidence: any[] = native?.evidence || [];
   const warnings = [
     "图像/OCR结果仅供人工核对，未从像素推算生产尺寸；请确认单位和比例",
   ];
+  warnings.push(...(native?.warnings || []));
   try {
     for (const [page, p] of pages.entries()) {
+      if (native && !p.needsOcr) continue;
+      await progress(`OCR第${page + 1}/${pages.length}页（待人工复核）`);
       const input = path.join(dir, `page-${page}.png`);
       await writeFile(input, Buffer.from(p.png, "base64"), { mode: 0o600 });
       try {
@@ -110,6 +189,8 @@ export async function analyzeCad(bytes: Buffer, format: string): Promise<any> {
           if (c.length >= 12 && c[11].trim())
             evidence.push({
               page: page + 1,
+              id: `P${page + 1}-OCR-${evidence.length + 1}`,
+              source: "ocr",
               text: c.slice(11).join("\t"),
               confidence: Number(c[10]),
               region: [
@@ -133,6 +214,7 @@ export async function analyzeCad(bytes: Buffer, format: string): Promise<any> {
     format,
     pages,
     evidence,
+    vectors: native?.vectors || [],
     warnings,
     units: 0,
   };

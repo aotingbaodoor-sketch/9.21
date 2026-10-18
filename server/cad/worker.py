@@ -7,6 +7,31 @@ from ezdxf import bbox
 def point(v):
     return [round(float(v[0]), 5), round(float(v[1]), 5)]
 
+def analyze_pdf(raw):
+    import pdfplumber
+    pages, evidence, vectors, warnings = [], [], [], []
+    with pdfplumber.open(io.BytesIO(raw)) as pdf:
+        if not 1 <= len(pdf.pages) <= 30: raise ValueError('PDF须为1至30页，请分卷上传')
+        for n, p in enumerate(pdf.pages, 1):
+            if len(p.chars)>15000 or len(p.edges)>15000: raise ValueError('单页内容过多，请拆分图纸')
+            words=p.extract_words(x_tolerance=2,y_tolerance=3)
+            for j,w in enumerate(words):
+                evidence.append({'id':f'P{n}-T{j+1}','page':n,'text':w['text'],'source':'pdf_text',
+                  'region':[w['x0']/p.width,w['top']/p.height,(w['x1']-w['x0'])/p.width,(w['bottom']-w['top'])/p.height], 'status':'待确认'})
+            # These are PDF page coordinates, never physical production dimensions.
+            edges=[{'id':f'P{n}-V{j+1}','page':n,'type':e['object_type'],'region':[e['x0']/p.width,e['top']/p.height,(e['x1']-e['x0'])/p.width,(e['bottom']-e['top'])/p.height]} for j,e in enumerate(p.edges)]
+            vectors.extend(edges)
+            img=p.to_image(resolution=min(120,1500/max(p.width,p.height)*72)).original.convert('RGB')
+            b=io.BytesIO();img.save(b,format='PNG',optimize=True)
+            # Image-only areas may contain dimensions even when a native title block exists.
+            image_area=sum(abs(i['width']*i['height']) for i in p.images)
+            needs_ocr=len(''.join(w['text'] for w in words))<20 or image_area/(p.width*p.height)>0.3
+            pages.append({'width':img.width,'height':img.height,'png':base64.b64encode(b.getvalue()).decode(),
+              'nativeTextCount':len(words),'vectorCount':len(edges),'needsOcr':needs_ocr})
+            if needs_ocr: warnings.append(f'第{n}页含扫描/图片区域：图中文字需OCR并人工复核')
+    return {'status':'analyzed' if evidence else 'manual','format':'pdf','units':0,'pages':pages,'evidence':evidence,'vectors':vectors,
+      'warnings':warnings+['PDF页坐标不是毫米；文字内容、尺寸含义、单位和比例均须人工核对，未按像素推算生产尺寸。']}
+
 def analyze(raw):
     # readfile honors DXF codepages and binary DXF; never silently replaces Chinese text.
     with tempfile.NamedTemporaryFile(suffix='.dxf', delete=False) as f:
@@ -97,10 +122,69 @@ def generate(data):
     report=analyze(raw)
     return {'dxf':base64.b64encode(raw).decode(),'analysis':report}
 
+def factory(raw,stamp=None):
+    # Rebuild from an allow-list, never clone source dictionaries, handles, XDATA,
+    # thumbnails, metadata, paths, images, paperspace or block definitions.
+    with tempfile.NamedTemporaryFile(suffix='.dxf',delete=False) as f:
+        f.write(raw); name=f.name
+    try: original=ezdxf.readfile(name)
+    finally: os.unlink(name)
+    if original.units!=4: raise ValueError('生产图：单位未确认为毫米')
+    if any(l.is_off() or l.is_frozen() for l in original.layers): raise ValueError('生产图：含隐藏/冻结图层，请在CAD中检查并清理后重新上传')
+    if any(b.block.dxf.flags&12 for b in original.blocks): raise ValueError('生产图：存在外部参照，须绑定并检查后重新上传')
+    if any(len(layout) for layout in original.layouts if layout.name!='Model'): raise ValueError('生产图：存在布局空间内容，请导出经过审核的独立模型空间生产图')
+    if len(original.entitydb)>40000: raise ValueError('生产图：实体过多，请分图')
+    doc=ezdxf.new('R2010');doc.units=4
+    doc.layers.new('GEOMETRY');doc.layers.new('TEXT');doc.layers.new('DIMENSIONS')
+    m=doc.modelspace(); count=0
+    def add(e,depth=0):
+        nonlocal count
+        count+=1
+        if count>15000 or depth>5:raise ValueError('生产图：实体或嵌套超过安全上限')
+        typ=e.dxftype(); layer={'layer':'GEOMETRY'}
+        if typ=='LINE':m.add_line(e.dxf.start,e.dxf.end,dxfattribs=layer)
+        elif typ=='LWPOLYLINE':m.add_lwpolyline(list(e.get_points()),close=e.closed,dxfattribs=layer)
+        elif typ=='CIRCLE':m.add_circle(e.dxf.center,e.dxf.radius,dxfattribs=layer)
+        elif typ=='ARC':m.add_arc(e.dxf.center,e.dxf.radius,e.dxf.start_angle,e.dxf.end_angle,dxfattribs=layer)
+        elif typ in ('TEXT','MTEXT'):
+            text=e.plain_text() if typ=='MTEXT' else e.dxf.text
+            if 'NOT FOR PRODUCTION' in text.upper() or '深化草稿' in text: raise ValueError('生产图：仍含草稿标记，不能把自动外框草稿批准生产')
+            if typ=='TEXT':m.add_text(text,dxfattribs={'layer':'TEXT','height':e.dxf.height,'rotation':e.dxf.rotation,'insert':e.dxf.insert})
+            else:m.add_mtext(text,dxfattribs={'layer':'TEXT','char_height':e.dxf.char_height,'insert':e.dxf.insert,'width':e.dxf.width})
+        elif typ=='DIMENSION':
+            if e.dimtype != 0:raise ValueError('生产图：当前安全重建仅支持旋转线性标注，请技术人员另存二维线性生产图')
+            if e.dxf.get('text','') not in ('','<>'):raise ValueError('生产图：存在手工覆盖尺寸文字，须与真实几何一致后重新提交')
+            style=e.override()
+            override={'dimtxt':float(style.get('dimtxt',2.5)),'dimasz':float(style.get('dimasz',2.5))}
+            dim=m.add_linear_dim(base=e.dxf.defpoint,p1=e.dxf.defpoint2,p2=e.dxf.defpoint3,angle=e.dxf.get('angle',0),override=override,dxfattribs={'layer':'DIMENSIONS'})
+            dim.render()
+        elif typ=='INSERT':
+            if e.attribs:raise ValueError('生产图：含图块属性，须展开并核查属性文字后提交')
+            for child in e.virtual_entities():add(child,depth+1)
+        else:raise ValueError('生产图：包含未支持的实体/图片/代理对象，请技术人员清理并另存安全DXF')
+    for e in original.modelspace():add(e)
+    if stamp:
+        box=bbox.extents(m,fast=True); size=max(box.size.y,100)/45
+        for n,text in enumerate(stamp):m.add_text(text,dxfattribs={'layer':'TEXT','height':size,'insert':(box.extmin.x,box.extmax.y+size*(2+n*1.5))})
+    stream=io.StringIO();doc.write(stream);output=stream.getvalue().encode('utf-8')
+    return {'dxf':base64.b64encode(output).decode(),'analysis':analyze(output),'privacyMethod':'fresh-whitelisted-DXF-no-original-metadata'}
+
+def review_copy(raw):
+    doc=ezdxf.read(io.StringIO(raw.decode('utf-8')))
+    box=bbox.extents(doc.modelspace(),fast=True); height=max(box.size.y,1)/20
+    doc.modelspace().add_text('REVIEW ONLY - NOT FOR PRODUCTION / 深化草稿',dxfattribs={'insert':(box.extmin.x,box.extmax.y+height),'height':height})
+    stream=io.StringIO();doc.write(stream)
+    return {'dxf':base64.b64encode(stream.getvalue().encode('utf-8')).decode()}
+
 if __name__=='__main__':
     try:
         request=json.load(sys.stdin)
-        result=generate(request['data']) if request['action']=='generate' else analyze(base64.b64decode(request['data']))
+        if request['action']=='generate': result=generate(request['data'])
+        elif request['action']=='pdf': result=analyze_pdf(base64.b64decode(request['data']))
+        elif request['action']=='factory':
+            data=request['data']; result=factory(base64.b64decode(data['raw']),data.get('stamp')) if isinstance(data,dict) else factory(base64.b64decode(data))
+        elif request['action']=='review_copy': result=review_copy(base64.b64decode(request['data']))
+        else: result=analyze(base64.b64decode(request['data']))
         print(json.dumps(result,ensure_ascii=True,allow_nan=False))
     except Exception as e:
         print(json.dumps({'error':str(e)[:250]},ensure_ascii=True));sys.exit(1)

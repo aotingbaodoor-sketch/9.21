@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useResource, useMutation } from "./api.ts";
 import { Field, ErrorBox, Loading } from "./ui.tsx";
-import { CAD_LIMITATIONS, cadSvg } from "../../shared/cad.ts";
+import { CAD_LIMITATIONS, CAD_STATES, cadSvg } from "../../shared/cad.ts";
+import { CadRelease } from "./CadRelease.tsx";
 import { TC_FIELDS } from "../../shared/technical.ts";
 import "./cad.css";
 const blankDetails = () => ({
@@ -75,16 +76,33 @@ function Viewer({ analysis }: { analysis: any }) {
         </label>
       ))}
       <div className="cad-canvas">
-        <img
-          style={{ width: `${zoom * 100}%`, maxWidth: "none" }}
-          alt="图纸预览（不可量图作为生产尺寸）"
-          src={
-            analysis.pages?.[page]
-              ? "data:image/png;base64," + analysis.pages[page].png
-              : "data:image/svg+xml;charset=utf-8," +
-                encodeURIComponent(cadSvg(analysis.primitives || [], hidden))
-          }
-        />
+        <div style={{ position: "relative", width: `${zoom * 100}%` }}>
+          <img
+            style={{ width: "100%", maxWidth: "none" }}
+            alt="图纸预览（不可量图作为生产尺寸）"
+            src={
+              analysis.pages?.[page]
+                ? "data:image/png;base64," + analysis.pages[page].png
+                : "data:image/svg+xml;charset=utf-8," +
+                  encodeURIComponent(cadSvg(analysis.primitives || [], hidden))
+            }
+          />
+          {selected?.region && selected.page === page + 1 && (
+            <span
+              aria-label="选中内容位置"
+              style={{
+                position: "absolute",
+                pointerEvents: "none",
+                border: "2px solid #e24422",
+                background: "#ffcc0033",
+                left: `${selected.region[0] * 100}%`,
+                top: `${selected.region[1] * 100}%`,
+                width: `${selected.region[2] * 100}%`,
+                height: `${selected.region[3] * 100}%`,
+              }}
+            />
+          )}
+        </div>
         {selected?.region && (
           <p>
             来源：第{selected.page}页，区域X/Y/宽/高：
@@ -142,7 +160,11 @@ function Viewer({ analysis }: { analysis: any }) {
                       {r.type} {r.text || r.block || ""}
                       {r.attributes && JSON.stringify(r.attributes)}
                     </td>
-                    <td>{r.measurement ?? r.confidence ?? "—"}</td>
+                    <td>
+                      {r.source === "pdf_text"
+                        ? "PDF原生文字"
+                        : (r.measurement ?? r.confidence ?? "—")}
+                    </td>
                   </tr>
                 ),
               )}
@@ -250,7 +272,7 @@ function Workspace({
         <details>
           <summary>实际格式能力与限制</summary>
           <p>
-            DXF：真实读取模型空间实体、图层、文字、标注、图块；生成可编辑线条/文字/尺寸。复杂曲线、外参及不支持实体会提示，不保证简图完整还原。DWG：仅存原件，请原CAD软件另存DXF。PDF/PNG/JPEG：按图像处理，本地OCR提供页码/区域与置信度，不能从像素推算尺寸。导出：DXF、PDF、SVG、参数报告；DWG导出未接入。
+            DXF：读取模型空间实体、图层、文字、标注、图块。DWG：服务器LibreDWG转换基础二维内容，代理/三维等对象可能不完整，失败请原CAD软件另存DXF。PDF：先提取原生文字及矢量边，再对扫描/图片区域进行本地OCR；图片不按像素推算生产尺寸。导出DXF、PDF；DWG导出未接入。复杂曲线预览可能不完整，不能代替独立CAD验收。
           </p>
         </details>
         <ErrorBox message={r.error || m.error} />
@@ -271,7 +293,7 @@ function Workspace({
               );
           }}
         >
-          <Field label="上传内部原图（4MB内，PDF最多5页）">
+          <Field label="上传内部原图（4MB内，PDF最多30页；复杂图纸请分卷）">
             <input
               type="file"
               accept=".dxf,.dwg,.pdf,.png,.jpg,.jpeg"
@@ -378,6 +400,7 @@ function Source({
         {m.busy ? "服务器分析中…原件已保存" : "分析图纸 / 失败重试"}
       </button>
       <p>未修改的文件复用已成功结果。服务器处理不依赖浏览器常开。</p>
+      <Progress id={id} />
       <Viewer analysis={r.data?.analysis?.result} />
       <Field label="关联真实TC版本">
         <select value={tcId} onChange={(e) => setTc(e.target.value)}>
@@ -410,6 +433,22 @@ function Source({
       )}
     </section>
   );
+}
+function Progress({ id }: { id: string }) {
+  const r = useResource<any>(
+    "/supply/cad/sources/" + id + "/progress",
+    0,
+    5000,
+  );
+  return r.data ? (
+    <p role="status">
+      {r.data.interrupted
+        ? "任务可能中断，请点击“失败重试”；原件和参数已保留"
+        : r.data.phase}{" "}
+      · 第{r.data.attempt}次处理 ·{" "}
+      {new Date(r.data.started_at).toLocaleString()}
+    </p>
+  ) : null;
 }
 function Parameters({
   tc,
@@ -626,7 +665,7 @@ function Version({
   return (
     <section className="card">
       <h3>
-        深化草稿 V{v.version} · {v.reviews[0]?.decision || "待审核"}
+        深化图 V{v.version} · {CAD_STATES[v.state] || "深化草稿"}
       </h3>
       <p>
         创建：{v.created_at}；引用TC：
@@ -754,7 +793,17 @@ function Version({
               />
               已检查图中文字、图层、图块、元数据及隐私
             </label>
-            <button disabled={m.busy}>保存技术审核</button>
+            <button
+              disabled={
+                m.busy ||
+                (decision === "approved_draft" && v.state !== "submitted")
+              }
+            >
+              保存技术审核
+            </button>
+            {v.state === "draft" && (
+              <p>请先在下方“审核与生产批准”点击“提交审核”。</p>
+            )}
           </form>
           <form
             onSubmit={(e) => {
@@ -772,16 +821,36 @@ function Version({
                 required
                 value={mo}
                 onChange={(e) => setMo(e.target.value)}
-              ><option value="">请选择已创建的MO草稿</option>{v.moDrafts?.map((d:any)=><option key={d.id} value={d.id}>{d.id.slice(0,8)} · {d.created_at}</option>)}</select>
+              >
+                <option value="">请选择已创建的MO草稿</option>
+                {v.moDrafts?.map((d: any) => (
+                  <option key={d.id} value={d.id}>
+                    {d.id.slice(0, 8)} · {d.created_at}
+                  </option>
+                ))}
+              </select>
             </Field>
-            {!v.moDrafts?.length&&<p>暂无对应MO草稿。请先完成<Link to={'/technical/'+v.tc_id}>本版本客户签认</Link>及原有WO/PO等门禁，再从TC创建MO草稿。</p>}
-            <button disabled={m.busy || !mo || !!v.staleReason}>关联MO草稿（不下达）</button>
+            {!v.moDrafts?.length && (
+              <p>
+                暂无对应MO草稿。请先完成
+                <Link to={"/technical/" + v.tc_id}>本版本客户签认</Link>
+                及原有WO/PO等门禁，再从TC创建MO草稿。
+              </p>
+            )}
+            <button
+              disabled={
+                m.busy ||
+                !mo ||
+                !!v.staleReason ||
+                v.state !== "production_approved"
+              }
+            >
+              关联MO生产批准图（不下达）
+            </button>
           </form>
         </>
       )}
-      <p>
-        工厂CAD下载未开放：当前缺少公司批准的生产节点模板及独立CAD软件验收，不允许以草稿外发生产。
-      </p>
+      <CadRelease version={v} refresh={refresh} />
     </section>
   );
 }

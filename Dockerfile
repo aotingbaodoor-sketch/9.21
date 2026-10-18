@@ -1,3 +1,8 @@
+FROM debian:bookworm-slim AS dwg-builder
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl build-essential && rm -rf /var/lib/apt/lists/*
+WORKDIR /tmp
+RUN curl -fL --retry 3 https://github.com/LibreDWG/libredwg/releases/download/0.13.3/libredwg-0.13.3.tar.gz -o source.tar.gz && echo '6fe6c273ecbb04d4a7646e1636ede4815b51f98f974cece649dab341d24feda2  source.tar.gz' | sha256sum -c - && tar -xzf source.tar.gz && cd libredwg-0.13.3 && ./configure --disable-shared --disable-bindings --disable-docs --disable-write --prefix=/opt/libredwg && make -j2 && make install
+
 FROM node:24-bookworm-slim AS builder
 WORKDIR /app
 COPY package*.json ./
@@ -17,6 +22,11 @@ RUN npx playwright install --with-deps chromium && apt-get update && apt-get ins
 COPY server/cad/requirements.txt /tmp/cad-requirements.txt
 RUN python3 -m venv /opt/cad && /opt/cad/bin/pip install --no-cache-dir -r /tmp/cad-requirements.txt
 ENV CAD_PYTHON=/opt/cad/bin/python
+COPY --from=dwg-builder /opt/libredwg /opt/libredwg
+COPY --from=dwg-builder /tmp/libredwg-0.13.3/COPYING /opt/libredwg/COPYING
+# Standalone GPLv3 converter; pinned corresponding source retained for redistribution compliance.
+COPY --from=dwg-builder /tmp/source.tar.gz /opt/libredwg/source-0.13.3.tar.gz
+ENV CAD_DWG_CONVERTER=/opt/libredwg/bin/dwg2dxf
 COPY --from=builder /app/build ./build
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/config/supabase-prod-ca.crt ./config/supabase-prod-ca.crt

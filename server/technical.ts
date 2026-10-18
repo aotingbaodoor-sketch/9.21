@@ -111,7 +111,7 @@ export async function requireCommercialAttachment(
   await requireConfirmedTc(db, actor, d.tc_id);
   return d;
 }
-async function privacy(db: Db, tc: any, value: unknown) {
+export async function privacy(db: Db, tc: any, value: unknown) {
   await factorySafe(db, value);
   const body = JSON.stringify(value).toLowerCase();
   // Business fields have no place in a factory payload, even when pasted into free text.
@@ -714,7 +714,7 @@ export function registerTechnical(app: Express, pool: pg.Pool, mutate: Mutate) {
       }
       await privacy(db, t, { technical, production });
       await latestTcDrawings(db,t.id,technical.items.map(i=>i.lineKey));
-      await requireCadProduction(db,t.project_id);
+      await requireCadProduction(db,t.project_id,t.id,d.id);
       const id = randomUUID(),
         partyA = {
           name: req.actor.name,
