@@ -22,6 +22,8 @@ import { orderWorkflow } from "./supply/order-workflow.ts";
 import { requireProductionInstruction } from "./supply/order-policy.ts";
 import { technicalHtml, renderHtmlPdf } from "./supply/manufacturing-export.ts";
 import { escapeXml as escape } from "../shared/drawing.ts";
+import {latestTcDrawings,linkTcDrawings} from './technical-drawings.ts';
+import {rasterPdf} from './drawing-raster.ts';
 type Mutate = (
   req: Request,
   res: Response,
@@ -29,10 +31,11 @@ type Mutate = (
 ) => Promise<void>;
 const uid = z.uuid();
 const projectScope = `($2='admin' OR ($2='sales' AND c.owner_id=$3 AND NOT c.wa_needs_assignment) OR ($2 IN ('technical','coordinator') AND (EXISTS(SELECT 1 FROM quotation_reviews r JOIN quotation_versions q ON q.id=r.quote_id WHERE q.project_id=p.id AND r.assigned_to=$3) OR EXISTS(SELECT 1 FROM crm_work_orders w JOIN sales_orders so ON so.id=w.sales_order_id JOIN quotation_orders qo ON qo.id=so.quotation_order_id WHERE qo.project_id=p.id AND w.scm_owner=$3))))`;
+const projectClosed=`EXISTS(SELECT 1 FROM quotation_orders qo JOIN sales_orders so ON so.quotation_order_id=qo.id LEFT JOIN crm_work_orders w ON w.sales_order_id=so.id LEFT JOIN crm_work_order_close wc ON wc.work_order_id=w.id WHERE qo.project_id=p.id AND (so.status IN ('closed','cancelled') OR wc.work_order_id IS NOT NULL))`;
 export async function tcProject(db: Db, actor: User, projectId: string) {
   const p = (
     await db.query(
-      `SELECT p.*,c.crm_customer_code,c.company,c.data customer_data FROM quotation_projects p JOIN customers c ON c.id=p.customer_id WHERE p.id=$1 AND c.deleted_at IS NULL AND ${projectScope}`,
+      `SELECT p.*,c.crm_customer_code,c.company,c.data customer_data,${projectClosed} project_closed FROM quotation_projects p JOIN customers c ON c.id=p.customer_id WHERE p.id=$1 AND c.deleted_at IS NULL AND ${projectScope}`,
       [projectId, actor.role, actor.id],
     )
   ).rows[0];
@@ -207,22 +210,24 @@ export function registerTechnical(app: Express, pool: pg.Pool, mutate: Mutate) {
         `attachment; filename="${t.tc_no}-V${t.version}.pdf"`,
       )
       .type("application/pdf")
-      .send(bytes);
+      .send(await rasterPdf((await pool.query('SELECT pages FROM technical_drawings WHERE tc_id=$1 ORDER BY created_at,id',[t.id])).rows.flatMap(r=>r.pages),bytes));
   });
   app.get("/api/supply/technical", async (req, res) => {
     const projects = (
       await pool.query(
-        `SELECT p.id,p.name,c.company,c.crm_customer_code FROM quotation_projects p JOIN customers c ON c.id=p.customer_id WHERE ($1::uuid IS NULL OR p.id=$1) AND c.deleted_at IS NULL AND ${projectScope} ORDER BY p.created_at DESC LIMIT 1000`,
+        `SELECT p.id,p.name,c.company,c.crm_customer_code FROM quotation_projects p JOIN customers c ON c.id=p.customer_id WHERE ($1::uuid IS NULL OR p.id=$1) AND c.deleted_at IS NULL AND NOT ${projectClosed} AND ${projectScope} ORDER BY p.created_at DESC LIMIT 1000`,
         [null, req.actor.role, req.actor.id],
       )
     ).rows;
     const records = (
       await pool.query(
-        `SELECT t.id,t.project_id,t.tc_no,t.version,t.series_id,t.created_at,s.signed_on,EXISTS(SELECT 1 FROM technical_confirmation n WHERE n.series_id=t.series_id AND n.version>t.version) superseded FROM technical_confirmation t LEFT JOIN technical_confirmation_signatures s ON s.tc_id=t.id WHERE t.project_id=ANY($1::uuid[]) ORDER BY t.created_at DESC`,
-        [projects.map((p) => p.id)],
+        `SELECT t.id,t.project_id,t.tc_no,t.version,t.series_id,t.created_at,s.signed_on,EXISTS(SELECT 1 FROM technical_confirmation n WHERE n.series_id=t.series_id AND n.version>t.version) superseded FROM technical_confirmation t JOIN quotation_projects p ON p.id=t.project_id JOIN customers c ON c.id=p.customer_id LEFT JOIN technical_confirmation_signatures s ON s.tc_id=t.id WHERE ($1::uuid IS NULL OR p.id=$1) AND c.deleted_at IS NULL AND ${projectScope} ORDER BY t.created_at DESC`,
+        [null,req.actor.role,req.actor.id],
       )
     ).rows;
-    res.json({ projects, records });
+    const reasons=(await pool.query(`SELECT count(*) FILTER(WHERE c.deleted_at IS NOT NULL)::int archived,count(*) FILTER(WHERE c.deleted_at IS NULL AND ${projectClosed})::int closed,count(*)::int visible FROM quotation_projects p JOIN customers c ON c.id=p.customer_id WHERE ($1::uuid IS NULL OR p.id=$1) AND ${projectScope}`,[null,req.actor.role,req.actor.id])).rows[0];
+    const anyProject=(await pool.query('SELECT EXISTS(SELECT 1 FROM quotation_projects) present')).rows[0].present;
+    res.json({ projects, records,availability:{...reasons,reason:projects.length?'ready':reasons.archived?'archived_customer':reasons.closed?'closed_project':anyProject&&req.actor.role!=='admin'?'no_permission':'no_projects',canCreate:['admin','sales'].includes(req.actor.role)} });
   });
   app.get("/api/supply/technical-project/:id", async (req, res) => {
     const p = await tcProject(pool, req.actor, uid.parse(req.params.id));
@@ -283,6 +288,7 @@ export function registerTechnical(app: Express, pool: pg.Pool, mutate: Mutate) {
     mutate(req, res, async (db) => {
       const input = saveSchema.parse(req.body),
         p = await tcProject(db, req.actor, input.projectId);
+      if(p.project_closed)throw new HttpError(409,'项目已关闭，请为后续业务新建报价项目；不恢复历史项目');
       if (!isCustomerCode(p.crm_customer_code))
         throw new HttpError(
           409,
@@ -706,6 +712,7 @@ export function registerTechnical(app: Express, pool: pg.Pool, mutate: Mutate) {
           );
       }
       await privacy(db, t, { technical, production });
+      await latestTcDrawings(db,t.id,technical.items.map(i=>i.lineKey));
       const id = randomUUID(),
         partyA = {
           name: req.actor.name,
@@ -752,6 +759,7 @@ export function registerTechnical(app: Express, pool: pg.Pool, mutate: Mutate) {
           );
         },
       );
+      await linkTcDrawings(db,id,t.id,technical.items.map(i=>i.lineKey),req.actor.id);
       await repo.audit(db, req.actor, "甲方签认并下达TC生产指令", id, {
         tcId: t.id,
         version: t.version,

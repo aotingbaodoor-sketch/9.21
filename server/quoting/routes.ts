@@ -21,6 +21,7 @@ import {applyLogistics} from '../logistics/engine.ts';
 import {loadCostRates,logisticsChanges} from '../logistics/routes.ts';
 import {materialChanges} from '../logistics/materials.ts';
 import {requireQuoteTc,requireCommercialAttachment} from '../technical.ts';
+import {rasterPdf} from '../drawing-raster.ts';
 import {attachSignedTc} from '../technical-export.ts';
 import {registerDocumentInTransaction} from '../document-registry.ts';
 
@@ -289,7 +290,8 @@ export function registerQuoting(app: Express, pool: pg.Pool, mutate: Mutate) {
         const existingRegistry=(await db.query('SELECT id,doc_no FROM crm_document_registry WHERE class_code=$1 AND business_kind=$2 AND business_id=$3',[input.kind==='contract'?'SC':'PI',input.kind,q.id])).rows[0];
         const r=existingRegistry??await registerDocumentInTransaction(db,{classCode:input.kind==='contract'?'SC':'PI',customerIds:[p.customer_id],date:businessDay((await repo.settings(db)).timezone),businessKind:input.kind,businessId:q.id,requestKey:z.uuid().parse(req.get('idempotency-key')),actorId:req.actor.id},async()=>{});
         const customer=(await db.query('SELECT crm_customer_code FROM customers WHERE id=$1',[p.customer_id])).rows[0];
-        const bytes=await attachSignedTc(await renderQuotePdf({...q,doc_no:r.doc_no},input.kind,input.language),t,signature,r.doc_no+'-A1',customer.crm_customer_code,p.company);
+        const sourcePages=(await db.query('SELECT pages FROM technical_drawings WHERE tc_id=$1 ORDER BY created_at,id',[t.id])).rows.flatMap(x=>x.pages);
+        const bytes=await rasterPdf(sourcePages,await attachSignedTc(await renderQuotePdf({...q,doc_no:r.doc_no},input.kind,input.language),t,signature,r.doc_no+'-A1',customer.crm_customer_code,p.company));
         await db.query('INSERT INTO quotation_documents(id,quote_id,kind,language,bytes_base64,sha256,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)',[documentId,q.id,input.kind,input.language,bytes.toString('base64'),createHash('sha256').update(bytes).digest('hex'),req.actor.id]);
         await db.query('INSERT INTO technical_commercial_documents(document_id,registry_id,tc_id,attachment_no) VALUES($1,$2,$3,$4)',[documentId,r.id,t.id,r.doc_no+'-A1']);
         await repo.audit(db,req.actor,'生成含签字TC的SC/PI',documentId,{docNo:r.doc_no,tcId:t.id,attachmentNo:r.doc_no+'-A1'});return{id:documentId};

@@ -9,6 +9,7 @@ import * as repo from "../repository.ts";
 import { registerDocumentInTransaction } from "../document-registry.ts";
 import { purchaseOrder } from "./access.ts";
 import {safeManufacturing} from '../technical.ts';
+import {moDrawingPages} from '../technical-drawings.ts';
 import {
   manufacturingExcel,
   manufacturingPdf,
@@ -515,8 +516,10 @@ export function registerOrderChain(
         await purchaseOrder(pool, req.actor, m.purchase_order_id);
       else await workOrder(pool, req.actor, m.work_order_id);
       const safe = await safeManufacturing(pool,m);
-      if(safe.changeRequired && req.actor.role==='factory')throw new HttpError(409,'源TC已升版，请联系公司完成生产变更处理，暂停下载旧指令');
+      if(safe.changeRequired && (req.actor.role==='factory'||req.params.format))throw new HttpError(409,'源TC已升版，请联系公司完成生产变更处理，暂停下载旧指令');
       // Allow-list projection, including for administrators: this endpoint IS the factory version.
+      let drawings:Awaited<ReturnType<typeof moDrawingPages>>=[],drawingError='';
+      try{drawings=await moDrawingPages(pool,m);}catch(e){if(!(e instanceof HttpError)||e.status!==409)throw e;drawingError=e.message;if(req.actor.role==='factory'||req.params.format)throw e;}
       const view = {
         id: m.id,
         docNo: m.doc_no,
@@ -528,13 +531,15 @@ export function registerOrderChain(
         issuedAt: m.created_at,
         audience: "factory",
         warranty: [],
+        drawingError,
+        drawings:drawings.map(d=>({id:d.id,label:d.label,version:d.version})),
       };
       if (req.params.format) {
         const format = z.enum(["pdf", "xlsx"]).parse(req.params.format);
         const bytes =
           format === "pdf"
-            ? await manufacturingPdf(view)
-            : await manufacturingExcel(view);
+            ? await manufacturingPdf({...view,drawingPages:drawings.flatMap(d=>d.pages)})
+            : await manufacturingExcel({...view,drawingPages:drawings.flatMap(d=>d.pages)});
         await repo.audit(pool, req.actor, "下载工厂版生产指令", m.id, {
           format,
           docNo: m.doc_no,

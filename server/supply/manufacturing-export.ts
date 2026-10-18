@@ -4,6 +4,7 @@ import { chromium } from "playwright";
 import { escapeXml as escape } from "../../shared/drawing.ts";
 import { HttpError } from "../domain.ts";
 import {TC_FIELDS,TC_GROUPS,PRODUCTION_FIELDS} from '../../shared/technical.ts';
+import {rasterPdf,type RasterPage} from '../drawing-raster.ts';
 export function technicalHtml(t:any,original?:Record<string,Record<string,string>>) {
   const e=(v:unknown)=>escape(String(v??''));
   return t.items.map((i:any)=>`<h2>${e(i.lineKey)} · ${e(i.kind)} · ${e(i.widthMm)} × ${e(i.heightMm)} mm · ${e(i.quantity)}</h2>${TC_GROUPS.map(g=>`<h3>${e(g.title)}</h3><table>${original?'<thead><tr><th>项目 / Item</th><td>客户原始需求 / Original</td><td>我方确认配置 / Confirmed</td></tr></thead>':''}<tbody>${g.keys.map(k=>`<tr><th>${e(TC_FIELDS[k])}</th>${original?`<td>${e(original[i.lineKey]?.[k])||'—'}</td>`:''}<td>${e(i.fields[k])||'—'}</td></tr>`).join('')}</tbody></table>`).join('')}`).join('');
@@ -16,6 +17,7 @@ export type ManufacturingView = {
   issuedAt: string;
   technical: Record<string, any>;
   warranty: { part: string; months?: number; days?: number }[];
+  drawingPages?:RasterPage[];
 };
 const labels: Record<string, string> = {
   profile: "型材 / Profile",
@@ -97,11 +99,16 @@ export async function manufacturingExcel(d: ManufacturingView) {
     "工厂专用 · 生产指令单 / Manufacturing Order · 本单是PO技术附件 · 无MO不得开工";
   sheet.getCell("C9").value =
     "本单仅以13位客户编号标识。所有资料保密，不得转用或用于直接联系。";
+  for(const [index,p] of (d.drawingPages??[]).entries()){
+    const tab=book.addWorksheet(`已审生产图纸${index+1}`);const id=book.addImage({base64:p.png,extension:'png'});
+    tab.addImage(id,{tl:{col:0,row:0},ext:{width:Math.min(p.width,1200),height:Math.round(p.height*Math.min(p.width,1200)/p.width)}});
+    tab.pageSetup={paperSize:9,orientation:p.width>p.height?'landscape':'portrait',fitToPage:true,fitToWidth:1,fitToHeight:1};
+  }
   return Buffer.from(await book.xlsx.writeBuffer());
 }
 let active = 0;
 export async function manufacturingPdf(d: ManufacturingView) {
-  return renderHtmlPdf(manufacturingHtml(d));
+  return rasterPdf(d.drawingPages??[],await renderHtmlPdf(manufacturingHtml(d)));
 }
 export async function renderHtmlPdf(html:string) {
   if (active >= 2) throw new HttpError(503, "PDF生成繁忙，请稍后重试");

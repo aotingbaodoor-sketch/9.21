@@ -1,6 +1,6 @@
 // ISOLATED DATABASE ONLY: tests the actual Express routes, database migrations and numbering service.
 import assert from "node:assert/strict";
-import { randomUUID, randomBytes } from "node:crypto";
+import { randomUUID, randomBytes, createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,8 +20,11 @@ import {
 import { fixtures, today } from "./quoting.fixtures.ts";
 import { calculate, policy } from "../server/quoting/engine.ts";
 import { PDFDocument } from "pdf-lib";
+import sharp from 'sharp';
+import {expect} from '@playwright/test';
+import {uiSession,uiProject,uiTc,uiDrawing,uiConfirm,uiDraft,uiReview,uiWrongTechnical,uiIssue} from './technical-ui.ts';
 const out =
-  "C:/Users/HUAWEI/Documents/AUTINBERG-Deliveries/tc-mo-20261018/evidence";
+  "C:/Users/HUAWEI/Documents/AUTINBERG-Deliveries/tc-mo-completion-20261018/evidence";
 mkdirSync(out, { recursive: true });
 const root = mkdtempSync(path.join(os.tmpdir(), "autinberg-chain-")),
   password = randomBytes(32).toString("base64url");
@@ -41,6 +44,7 @@ const pool = database(
 const origin = "http://127.0.0.1:4635";
 let server: Server | undefined,
   started = false;
+let ui:Awaited<ReturnType<typeof uiSession>>|undefined;
 type Actor = { cookie: string; csrf: string };
 const results: { name: string; status: string }[] = [];
 function passed(name: string) {
@@ -91,7 +95,7 @@ try {
   await local.createDatabase("technical_test");
   await migrate(pool);
   await migrate(pool);
-  passed("028 additive migrations apply twice without duplicate changes");
+  passed("028/029 additive migrations apply twice without duplicate changes");
   const adminId = randomUUID(),
     salesId = randomUUID(),
     otherId = randomUUID(),
@@ -156,6 +160,8 @@ try {
     "INSERT INTO factory_users(factory_id,user_id,status) VALUES($1,$2,'approved')",
     [factoryId, factoryUser],
   );
+  assert.equal((await ok(admin,'/supply/technical')).availability.reason,'no_projects');
+  if(process.argv.includes('--ui'))ui=await uiSession(origin,password);
   for (const [kindIndex, kind] of ["door", "window", "wall_panel"].entries()) {
     const customer = await ok(admin, "/customers", {
       company: "ISOLATED Private Buyer " + kind,
@@ -175,12 +181,12 @@ try {
     assert.equal(identity.code.length, 13);
     const ledger = await ok(admin, "/master-data/numbering");
     assert.equal(ledger.customers[0].first_dev_partner_id, sources[0].id);
-    const projectId = randomUUID(),
-      quoteId = randomUUID(),
+    const projectId = ui?await uiProject(ui.page,origin,customer.id,'ISOLATED '+kind):randomUUID();
+    const quoteId = randomUUID(),
       quoteOrder = randomUUID(),
       orderId = randomUUID(),
       itemId = randomUUID();
-    await pool.query(
+    if(!ui)await pool.query(
       "INSERT INTO quotation_projects(id,customer_id,name,created_by) VALUES($1,$2,'ISOLATED chain',$3)",
       [projectId, customer.id, adminId],
     );
@@ -234,6 +240,23 @@ try {
       "INSERT INTO sales_orders(id,quotation_order_id,order_number,created_by,deposit_gate_required) VALUES($1,$2,$3,$4,false)",
       [orderId, quoteOrder, "LEGACY-TEST-SO-" + kind, adminId],
     );
+    if(kindIndex===0){
+      const hidden=await ok(other,'/supply/technical');assert.equal(hidden.availability.reason,'no_permission');assert.equal(hidden.projects.length,0);
+      await pool.query('UPDATE customers SET deleted_at=now() WHERE id=$1',[customer.id]);
+      assert.equal((await ok(admin,'/supply/technical')).availability.reason,'archived_customer');
+      if(ui){await ui.page.goto(origin+'/technical');await expect(ui.page.getByText(/已有项目的客户已归档/)).toBeVisible();}
+      await pool.query('UPDATE customers SET deleted_at=NULL WHERE id=$1',[customer.id]);
+      await pool.query("UPDATE sales_orders SET status='closed' WHERE id=$1",[orderId]);
+      assert.equal((await ok(admin,'/supply/technical')).availability.reason,'closed_project');
+      if(ui){await ui.page.goto(origin+'/technical');await expect(ui.page.getByText(/已有项目已关闭/)).toBeVisible();}
+      await pool.query("UPDATE sales_orders SET status='confirmed' WHERE id=$1",[orderId]);
+      if(ui){
+        await ui.page.route('**/api/supply/technical',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'ISOLATED simulated loading failure'})}));
+        await ui.page.goto(origin+'/technical');await expect(ui.page.getByRole('heading',{name:'TC项目加载失败'})).toBeVisible();
+        await ui.page.unroute('**/api/supply/technical');await ui.page.getByRole('button',{name:'重新加载项目'}).click();await expect(ui.page.getByRole('heading',{name:'技术确认单 TC',exact:true})).toBeVisible();
+      }
+      passed('Empty project reasons: no projects, archived customer, closed project, access denied; simulated network failure and UI retry');
+    }
     await pool.query(
       "INSERT INTO sales_order_items(id,sales_order_id,line_key,configuration_snapshot,quantity) VALUES($1,$2,'Door-01','{}',2)",
       [itemId, orderId],
@@ -427,8 +450,10 @@ try {
         business,
         reason: "ISOLATED " + kind,
       };
-    const tc = await ok(admin, "/supply/technical", body, key);
-    assert.deepEqual(await ok(admin, "/supply/technical", body, key), tc);
+    const uiCreated=ui?await uiTc(ui.page,origin,body):null;
+    const tc = uiCreated?.value??await ok(admin, "/supply/technical", body, key);
+    // Replay the actual browser request, not an altered fixture.
+    assert.deepEqual(await ok(admin, "/supply/technical", uiCreated?.body??body,uiCreated?.key??key), tc);
     assert.equal(
       (await ok(admin, "/supply/technical")).records.length,
       kindIndex * 2 + 1,
@@ -475,6 +500,20 @@ try {
       lines: [{ lineKey: "Door-01", quantity: 1 }],
       production,
     };
+    const original=await PDFDocument.create();original.setTitle('SECRET CUSTOMER metadata');const sourcePage=original.addPage([600,400]);sourcePage.drawText('SECRET CUSTOMER +86123456789 signature address',{x:15,y:355,size:14});sourcePage.drawText('1000 x 2000 mm - STRUCTURE MUST STAY',{x:25,y:80,size:16});
+    const originalBytes=Buffer.from(await original.save());
+    const uiImage=ui?await uiDrawing(ui.page,origin,tc.id,originalBytes):null;
+    const drawing=uiImage?.drawing??await ok(admin,`/supply/technical/${tc.id}/drawings`,{name:'SECRET customer original.pdf',mime:'application/pdf',data:originalBytes.toString('base64'),lineKeys:['Door-01']});
+    const redaction=uiImage?.redaction??await ok(admin,`/supply/technical-drawings/${drawing.id}/redactions`,{baseVersion:0,rectangles:[{page:0,x:0,y:0,width:1,height:.34}],reason:'TEST privacy mask'});
+    assert.equal((await request(factory,`/supply/technical-drawings/${drawing.id}/original`)).status,404);
+    assert.equal((await request(other,`/supply/technical-drawings/${drawing.id}`)).status,404);
+    assert.equal((await request(sales,`/supply/drawing-redactions/${redaction.id}/review`,{approved:true,note:'unauthorized',reviewedPages:[0],privacyRemoved:true,technicalPreserved:true})).status,403);
+    const raster=await ok(admin,`/supply/drawing-redactions/${redaction.id}/pages/0`),originRaster=await ok(admin,`/supply/technical-drawings/${drawing.id}/pages/0`);
+    const maskPixel=await sharp(raster).extract({left:100,top:100,width:1,height:1}).removeAlpha().raw().toBuffer();assert.deepEqual([...maskPixel],[0,0,0]);
+    const meta=await sharp(raster).metadata(),bottom={left:0,top:Math.floor(meta.height!*.5),width:meta.width!,height:Math.floor(meta.height!*.4)};
+    const pixelDigest=async(bytes:Buffer)=>createHash('sha256').update(await sharp(bytes).extract(bottom).removeAlpha().raw().toBuffer()).digest('hex');
+    assert.equal(await pixelDigest(raster),await pixelDigest(originRaster),'Unmasked technical pixels must remain unchanged');
+    assert.equal(meta.exif,undefined);writeFileSync(path.join(out,kind+'-redacted.png'),raster);
     assert.equal(
       (
         await request(
@@ -485,14 +524,17 @@ try {
       ).status,
       409,
     );
-    await ok(sales, "/supply/technical/" + tc.id + "/confirm", {
+    if(ui)await uiConfirm(ui.page,origin,tc.id,file.id,today,quoteId);
+    else {await ok(sales, "/supply/technical/" + tc.id + "/confirm", {
       fileId: file.id,
       signerName: "ISOLATED Buyer signature",
       signedOn: today,
       verified: true,
     });
     await ok(admin, "/supply/technical/" + tc.id + "/bind-quote", { quoteId });
-    const draft = await ok(
+    }
+    assert.equal((await request(admin,`/supply/technical/${tc.id}/drawings`,{name:'new.pdf',mime:'application/pdf',data:originalBytes.toString('base64'),lineKeys:['Door-01']})).status,409);
+    const draft = ui?await uiDraft(ui.page,origin,work.id,draftBody):await ok(
       admin,
       "/supply/chain/" + work.id + "/manufacturing-drafts",
       draftBody,
@@ -519,10 +561,13 @@ try {
       lines: [{ itemId, widthMm: 1000, heightMm: 2000 }],
       note: "ISOLATED dimensions",
     });
+    assert.equal((await request(admin,`/supply/manufacturing-drafts/${draft.id}/issue`,{revision:1,partyAConfirmed:true})).status,409,'unreviewed drawing gate');
+    assert.equal((await request(admin,`/supply/drawing-redactions/${redaction.id}/review`,{approved:true,note:'incomplete checklist',reviewedPages:[],privacyRemoved:true,technicalPreserved:true})).status,422);
+    if(ui)await uiReview(ui.page,origin,drawing.id,redaction.id);else await ok(admin,`/supply/drawing-redactions/${redaction.id}/review`,{approved:true,note:'TEST reviewed all pages',reviewedPages:[0],privacyRemoved:true,technicalPreserved:true});
     const changed = structuredClone(tech);
     changed.items[0].quantity = 1;
     changed.items[0].fields.finalHardware = "WRONG";
-    await ok(
+    if(ui)await uiWrongTechnical(ui.page,origin,draft.id);else await ok(
       admin,
       "/supply/manufacturing-drafts/" + draft.id,
       { revision: 1, technical: changed, production },
@@ -577,8 +622,9 @@ try {
       undefined,
       "PUT",
     );
-    const issueKey = randomUUID(),
-      mo = await ok(
+    const uiIssued=ui?await uiIssue(ui.page,origin,draft.id):null;
+    const issueKey = uiIssued?.key??randomUUID(),
+      mo = uiIssued?.value??await ok(
         admin,
         "/supply/manufacturing-drafts/" + draft.id + "/issue",
         { revision: 4, partyAConfirmed: true },
@@ -594,6 +640,11 @@ try {
       mo,
     );
     const view = await ok(factory, "/supply/manufacturing/" + mo.id);
+    assert.equal(view.drawings.length,1);
+    const drawingDownload=await ok(factory,`/supply/manufacturing/${mo.id}/drawings/${redaction.id}/download`);
+    const cleanPdf=await PDFDocument.load(drawingDownload);assert.equal(cleanPdf.getPageCount(),1);assert.ok(!cleanPdf.getTitle()?.includes('SECRET'));
+    assert.equal((await request(otherFactory,`/supply/manufacturing/${mo.id}/drawings/${redaction.id}/download`)).status,404);
+    writeFileSync(path.join(out,kind+'-drawing.pdf'),drawingDownload);
     for (const route of ["/supply/manufacturing/"+mo.id, "/supply/manufacturing/"+mo.id+"/export/pdf", "/supply/purchase-orders/"+po.id]) {
       assert.ok([403,404].includes((await request(otherFactory,route)).status),route);
     }
@@ -693,6 +744,7 @@ try {
     const ExcelJS = (await import("exceljs")).default,
       book = new ExcelJS.Workbook();
     await book.xlsx.load(excel);
+    assert.equal(book.worksheets.reduce((n,s)=>n+s.getImages().length,0),1);
     const cells = book.worksheets
       .flatMap((s) => s.getSheetValues())
       .flat(5)
@@ -710,6 +762,32 @@ try {
     writeFileSync(path.join(out, kind + "-mo.xlsx"), excel);
     writeFileSync(path.join(out, kind + "-mo.pdf"), pdf);
     writeFileSync(path.join(out, kind + "-sc.pdf"), contract);
+    if(ui){
+      const page=await ui.browser.newPage();try{
+        await page.goto(origin);await page.getByLabel('邮箱',{exact:true}).fill('factory@chain.invalid');await page.getByLabel('密码',{exact:true}).fill(password);await page.getByRole('button',{name:'登录',exact:true}).click();await expect(page.getByRole('button',{name:'退出',exact:true})).toBeVisible();
+        await page.goto(origin+'/supply/manufacturing/'+mo.id);const download=page.waitForEvent('download');await page.getByRole('link',{name:'下载工厂版PDF',exact:true}).click();await(await download).saveAs(path.join(out,kind+'-ui-mo.pdf'));await expect(page.getByText(/SECRET|ISOLATED Private Buyer/)).toHaveCount(0);await page.screenshot({path:path.join(out,kind+'-ui-mo.png')});
+      }finally{await page.close();}
+    }
+    const revisedImage=await ok(admin,`/supply/technical-drawings/${drawing.id}/redactions`,{baseVersion:1,rectangles:[{page:0,x:0,y:0,width:1,height:.35}],reason:'TEST new redaction resets review'});
+    assert.equal((await request(factory,`/supply/manufacturing/${mo.id}/drawings/${redaction.id}/download`)).status,409);
+    assert.equal((await request(factory,`/supply/manufacturing/${mo.id}/export/pdf`)).status,409);
+    assert.equal((await request(admin,`/supply/manufacturing/${mo.id}/drawings/link`,{})).status,409);
+    if(ui)await uiReview(ui.page,origin,drawing.id,revisedImage.id);else await ok(admin,`/supply/drawing-redactions/${revisedImage.id}/review`,{approved:true,note:'TEST reviewed revised copy',reviewedPages:[0],privacyRemoved:true,technicalPreserved:true});
+    assert.equal((await request(factory,`/supply/manufacturing/${mo.id}/export/pdf`)).status,409,'new reviewed copy must explicitly link to MO');
+    await ok(admin,`/supply/manufacturing/${mo.id}/drawings/link`,{});
+    assert.equal((await request(factory,`/supply/manufacturing/${mo.id}/drawings/${redaction.id}/download`)).status,404,'old link stays invalid');
+    await ok(factory,`/supply/manufacturing/${mo.id}/drawings/${revisedImage.id}/download`);
+    assert.equal((await ok(admin,`/supply/technical-drawings/${drawing.id}/original`)).equals(originalBytes),true);
+    if(kindIndex===0){
+      const rejected=await ok(admin,`/supply/technical-drawings/${drawing.id}/redactions`,{baseVersion:2,rectangles:[],reason:'TEST unsafe copy must be rejected'});
+      await ok(admin,`/supply/drawing-redactions/${rejected.id}/review`,{approved:false,note:'TEST customer identity remains visible',reviewedPages:[0],privacyRemoved:false,technicalPreserved:true});
+      assert.equal((await request(factory,`/supply/manufacturing/${mo.id}/export/xlsx`)).status,409);
+      assert.equal((await request(admin,`/supply/manufacturing/${mo.id}/drawings/link`,{})).status,409);
+      assert.equal((await request(admin,`/supply/drawing-redactions/${rejected.id}/review`,{approved:true,note:'cannot overwrite rejection',reviewedPages:[0],privacyRemoved:true,technicalPreserved:true})).status,409);
+      await assert.rejects(pool.query('UPDATE technical_drawing_redactions SET pages=$2 WHERE id=$1',[rejected.id,'[]']));
+      passed('Rejected image blocks factory Excel and linkage; review and copy records cannot be overwritten');
+    }
+    passed(kind+': original internal, raster privacy, human review, immutable versions, MO linkage and stale download revocation');
     passed(
       kind +
         ": TC signature, G43 SC/PI attachment, G44 diff, G46 privacy, batch concurrency, real PDF/Excel and role isolation",
@@ -818,6 +896,7 @@ try {
         ": revision requires reconfirmation; historical MO immutable; stale exports blocked",
     );
   }
+  if(ui)assert.deepEqual(ui.errors,[]);
   await local.createDatabase("technical_restore");
   const restored = database(
     `postgresql://postgres:${password}@127.0.0.1:55635/technical_restore`,
@@ -833,6 +912,11 @@ try {
       ).rows[0].n,
       6,
     );
+    for(const table of ['technical_drawings','technical_drawing_redactions','technical_drawing_reviews','technical_mo_drawings']){
+      const column=table==='technical_drawing_reviews'?'redaction_id':'id';
+      const digestRows=async(db:typeof pool)=>createHash('sha256').update(JSON.stringify((await db.query(`SELECT row_to_json(t) row FROM (SELECT * FROM ${table} ORDER BY ${column})t`)).rows)).digest('hex');
+      assert.equal(await digestRows(restored),await digestRows(pool),'Restored drawings/reviews/links: '+table);
+    }
     assert.equal(
       (
         await restored.query(
@@ -848,11 +932,12 @@ try {
     await restored.end();
   }
   writeFileSync(
-    path.join(out, "tests.json"),
+    path.join(out, process.argv.includes('--ui')?'tests.json':'api-tests.json'),
     JSON.stringify(
       {
         at: new Date().toISOString(),
         environment: "isolated actual CRM PostgreSQL + Express",
+        browserActions:process.argv.includes('--ui'),
         results,
       },
       null,
@@ -866,7 +951,12 @@ try {
       productionMutated: false,
     }),
   );
+} catch(e){
+  console.error(e);
+  if(ui){try{writeFileSync(path.join(out,'failure.txt'),await ui.page.locator('body').innerText({timeout:5000})+'\n'+JSON.stringify(ui.errors));await ui.page.screenshot({path:path.join(out,'failure.png'),timeout:5000});}catch{console.error('Failure capture unavailable; original error preserved');}}
+  throw e;
 } finally {
+  if(ui)await ui.browser.close();
   if (server) {
     server.closeAllConnections();
     await new Promise<void>((r) => server!.close(() => r()));

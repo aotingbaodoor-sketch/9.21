@@ -6,6 +6,7 @@ import { ErrorBox, Loading, Field } from "./ui.tsx";
 import Settlement from './Settlement.tsx';
 import Completion from './Completion.tsx';
 import {TcManufacturingForm,TechnicalFields} from './Technical.tsx';
+import {PRODUCTION_FIELDS} from '../../shared/technical.ts';
 
 type Item = {
   id: string;
@@ -566,7 +567,7 @@ function LogisticsForm({
 }
 export function ManufacturingView() {
   const { id } = useParams(),
-    r = useResource<any>(`/supply/manufacturing/${id}`);
+    [rev,setRev]=useState(0),r = useResource<any>(`/supply/manufacturing/${id}`,rev),m=useMutation(),{user}=useSession();
   if (r.loading) return <Loading />;
   if (!r.data) return <ErrorBox message={r.error} />;
   const d = r.data;
@@ -585,9 +586,13 @@ export function ManufacturingView() {
         <a href={`/api/supply/manufacturing/${id}/export/pdf`}>下载工厂版PDF</a>{" "}
         ·{" "}
         <a href={`/api/supply/manufacturing/${id}/export/xlsx`}>
-          下载原模板Excel
+          下载工厂版Excel（现有模板＋技术附页）
         </a>
       </p>
+      <h3>已审核生产图纸</h3><ErrorBox message={d.drawingError||m.error}/>
+      {d.drawings?.map((x:any)=><p key={x.id}><a href={`/api/supply/manufacturing/${id}/drawings/${x.id}/download`}>{x.label} · 下载工厂版</a></p>)}
+      {!d.drawings?.length&&!d.drawingError&&<p>此MO未关联技术图纸；未提供未经审核的原文件。</p>}
+      {['admin','technical'].includes(user.role)&&<><Link to="/technical">到TC页面处理图纸脱敏审核</Link><p><button disabled={m.busy||d.changeRequired} onClick={()=>void m.run(`/supply/manufacturing/${id}/drawings/link`,'POST',{},()=>setRev(n=>n+1))}>关联最新已审副本到此MO</button></p></>}
       <div className="table-wrap">
         <table>
           <thead>
@@ -613,7 +618,7 @@ export function ManufacturingView() {
       <table>
         <tbody>
           {Object.entries(d.technical)
-            .filter(([k]) => k !== "items" && k !== 'tcTechnical')
+            .filter(([k,v]) => k !== "items" && k !== 'tcTechnical'&&typeof v!=='object')
             .map(([k, v]) => (
               <tr key={k}>
                 <th>{labels[k] || k}</th>
@@ -622,6 +627,7 @@ export function ManufacturingView() {
             ))}
         </tbody>
       </table>
+      {d.technical.production&&<><h3>生产线需求</h3><dl>{Object.entries(PRODUCTION_FIELDS).map(([k,label])=><div key={k}><dt>{label}</dt><dd>{d.technical.production[k]}</dd></div>)}</dl><p>甲方签认：{d.technical.partyA?.name} · {d.technical.partyA?.confirmedAt}</p></>}
       <h3>供应商保质期（交付之日起）</h3>
       {d.warranty.map((w: any) => (
         <p key={w.part}>

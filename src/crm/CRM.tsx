@@ -37,6 +37,7 @@ const Backups=lazy(()=>import('./Backups.tsx'));
 const Tariffs=lazy(()=>import('./Tariffs.tsx'));
 const Logistics=lazy(()=>import('./Logistics.tsx'));
 const Technical=lazy(()=>import('./Technical.tsx'));
+const DrawingEditor=lazy(()=>import('./TechnicalDrawings.tsx'));
 const ManufacturingDraft=lazy(()=>import('./Technical.tsx').then(m=>({default:m.ManufacturingDraft})));
 const OrderChain=lazy(()=>import('./OrderChain.tsx'));
 const ManufacturingView=lazy(()=>import('./OrderChain.tsx').then(m=>({default:m.ManufacturingView})));
@@ -224,6 +225,7 @@ function Root() {
             <Route path="/supply/chain" element={<OrderChain/>}/>
             <Route path="/technical" element={<Technical/>}/>
             <Route path="/technical/:id" element={<Technical/>}/>
+            <Route path="/technical/drawings/:id" element={<DrawingEditor/>}/>
             <Route path="/supply/manufacturing-drafts/:id" element={<ManufacturingDraft/>}/>
             <Route path="/supply/chain/:id" element={<OrderChain/>}/>
             <Route path="/supply/manufacturing/:id" element={<ManufacturingView/>}/>

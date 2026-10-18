@@ -13,7 +13,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 COPY package*.json ./
 COPY scripts/silence-signal-logs.mjs ./scripts/silence-signal-logs.mjs
 RUN npm ci --omit=dev && npm cache clean --force
-RUN npx playwright install --with-deps chromium && apt-get update && apt-get install -y --no-install-recommends fonts-noto-cjk && rm -rf /var/lib/apt/lists/* && chmod -R a+rX /opt/playwright
+RUN npx playwright install --with-deps chromium && apt-get update && apt-get install -y --no-install-recommends fonts-noto-cjk poppler-utils && rm -rf /var/lib/apt/lists/* && chmod -R a+rX /opt/playwright
 COPY --from=builder /app/build ./build
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/config/supabase-prod-ca.crt ./config/supabase-prod-ca.crt

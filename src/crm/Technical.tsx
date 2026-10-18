@@ -3,6 +3,7 @@ import { Link, useParams, useNavigate } from "react-router-dom";
 import { useResource, useMutation } from "./api.ts";
 import { ErrorBox, Field, Loading } from "./ui.tsx";
 import { useSession } from "./context.tsx";
+import {TcDrawings} from './TechnicalDrawings.tsx';
 import {
   TC_FIELDS,
   TC_GROUPS,
@@ -153,18 +154,22 @@ export default function Technical() {
   return id ? <Detail id={id} /> : <List />;
 }
 function List() {
-  const r = useResource<any>("/supply/technical"),
+  const [rev,setRev]=useState(0),r = useResource<any>("/supply/technical",rev),
     [project, setProject] = useState(""),
     [create, setCreate] = useState(false);
   if (r.loading) return <Loading />;
+  if(r.error)return <section className="card"><h2>TC项目加载失败</h2><ErrorBox message={r.error}/><p>这不是“没有项目”。请检查网络或登录权限，不要重复创建项目。</p><button onClick={()=>setRev(n=>n+1)}>重新加载项目</button></section>;
   return (
     <>
       <ErrorBox message={r.error} />
       <section className="card">
         <h2>技术确认单 TC</h2>
         <p>
-          先在“报价单”建立客户项目及报价草稿。TC为技术唯一来源；保存后如需修改，创建新版本。
+          先选择在用客户建立报价项目，再创建TC；已有报价草稿可带入行标识。TC为技术唯一来源，保存后修改须创建新版本。
         </p>
+        <p className="muted">窗TC、护墙板TC及新版MO原模板尚未找到；当前字段按20261015最终版明确要求实施，原版结构待核对。</p>
+        {!r.data?.projects.length&&<div role="status"><p>{{archived_customer:'没有可选项目：已有项目的客户已归档，不会自动恢复。',closed_project:'没有可选项目：已有项目已关闭，请为新业务另建报价项目。',no_permission:'当前账号没有获授权的项目，请由管理员分配；不会显示其他员工的客户资料。',no_projects:'尚未建立报价项目，请先选择在用客户。'}[r.data?.availability.reason as string]??'没有可选项目'}</p><p>当前授权范围：归档客户项目{r.data?.availability.archived??0}个，已关闭项目{r.data?.availability.closed??0}个。</p></div>}
+        {r.data?.availability.canCreate?<NewProject onCreated={id=>{setProject(id);setCreate(true);setRev(n=>n+1);}}/>:<p>当前岗位不能新建客户报价项目；请销售或管理员建档并分配。</p>}
         <Field label="选择客户项目">
           <select
             value={project}
@@ -221,6 +226,14 @@ function List() {
       </section>
     </>
   );
+}
+function NewProject({onCreated}:{onCreated:(id:string)=>void}){
+ const [open,setOpen]=useState(false),[q,setQ]=useState(''),[customer,setCustomer]=useState(''),[name,setName]=useState(''),m=useMutation();
+ return <details open={open} onToggle={e=>setOpen(e.currentTarget.open)}><summary>选择在用客户 → 新建报价项目 → 创建TC</summary>{open&&<ProjectForm q={q} setQ={setQ} customer={customer} setCustomer={setCustomer} name={name} setName={setName} m={m} done={onCreated}/>}</details>;
+}
+function ProjectForm({q,setQ,customer,setCustomer,name,setName,m,done}:{q:string;setQ:(v:string)=>void;customer:string;setCustomer:(v:string)=>void;name:string;setName:(v:string)=>void;m:ReturnType<typeof useMutation>;done:(id:string)=>void}){
+ const r=useResource<any>(`/customers?page=1&q=${encodeURIComponent(q)}`);
+ return <form onSubmit={e=>{e.preventDefault();void m.run<{id:string}>('/quoting/projects','POST',{customerId:customer,name},r=>done(r.id));}}><ErrorBox message={r.error||m.error}/><Field label="搜索在用客户"><input value={q} onChange={e=>{setQ(e.target.value);setCustomer('');}}/></Field><Field label="在用客户"><select required value={customer} onChange={e=>setCustomer(e.target.value)}><option value="">请选择有权访问的客户</option>{r.data?.items.map((c:any)=><option key={c.id} value={c.id}>{c.company||c.contact}</option>)}</select></Field>{!r.loading&&!r.error&&!r.data?.items.length&&<p>没有匹配的在用客户。<Link to="/customers">进入客户管理填写真实客户资料</Link></p>}<Field label="新报价项目名称"><input required maxLength={150} value={name} onChange={e=>setName(e.target.value)}/></Field><button disabled={m.busy||r.loading||!customer||!name.trim()}>创建项目并填写TC</button><p>只创建你填写的项目，不创建虚假客户、订单或签字。客户缺少13位编号时需先在客户主数据完成建档。</p></form>;
 }
 function Editor({
   projectId,
@@ -493,6 +506,7 @@ function Detail({ id }: { id: string }) {
           </p>
         </section>
       )}
+      <TcDrawings tcId={id} lineKeys={d.technical.items.map((i:any)=>i.lineKey)}/>
     </>
   );
 }
