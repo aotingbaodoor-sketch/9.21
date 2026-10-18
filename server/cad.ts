@@ -236,7 +236,7 @@ export function registerCad(app: Express, pool: pg.Pool, mutate: Mutate) {
       ]);
       const cached = (
         await db.query(
-          "SELECT id,status FROM cad_analysis WHERE source_id=$1 AND engine=$2 AND status IN ('analyzed','unsupported') ORDER BY created_at DESC LIMIT 1",
+          "SELECT id,status FROM cad_analysis WHERE source_id=$1 AND engine=$2 AND status='analyzed' ORDER BY created_at DESC LIMIT 1",
           [s.id, CAD_ENGINE],
         )
       ).rows[0];

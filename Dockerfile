@@ -1,7 +1,7 @@
 FROM debian:bookworm-slim AS dwg-builder
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl build-essential && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl build-essential python3 && rm -rf /var/lib/apt/lists/*
 WORKDIR /tmp
-RUN curl -fL --retry 3 https://github.com/LibreDWG/libredwg/releases/download/0.13.3/libredwg-0.13.3.tar.gz -o source.tar.gz && echo '6fe6c273ecbb04d4a7646e1636ede4815b51f98f974cece649dab341d24feda2  source.tar.gz' | sha256sum -c - && tar -xzf source.tar.gz && cd libredwg-0.13.3 && ./configure --disable-shared --disable-bindings --disable-docs --disable-write --prefix=/opt/libredwg && make -j2 && make install
+RUN curl -fL --retry 3 https://github.com/LibreDWG/libredwg/releases/download/0.13.3/libredwg-0.13.3.tar.gz -o source.tar.gz && echo '6fe6c273ecbb04d4a7646e1636ede4815b51f98f974cece649dab341d24feda2  source.tar.gz' | sha256sum -c - && tar -xzf source.tar.gz && cd libredwg-0.13.3 && ./configure --disable-shared --disable-bindings --disable-python --disable-docs --disable-write --prefix=/opt/libredwg && make -j2 && make install
 
 FROM node:24-bookworm-slim AS builder
 WORKDIR /app
