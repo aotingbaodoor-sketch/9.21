@@ -3,6 +3,11 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { escapeXml as escape } from "../../shared/drawing.ts";
 import { HttpError } from "../domain.ts";
+import {TC_FIELDS,TC_GROUPS,PRODUCTION_FIELDS} from '../../shared/technical.ts';
+export function technicalHtml(t:any,original?:Record<string,Record<string,string>>) {
+  const e=(v:unknown)=>escape(String(v??''));
+  return t.items.map((i:any)=>`<h2>${e(i.lineKey)} · ${e(i.kind)} · ${e(i.widthMm)} × ${e(i.heightMm)} mm · ${e(i.quantity)}</h2>${TC_GROUPS.map(g=>`<h3>${e(g.title)}</h3><table>${original?'<thead><tr><th>项目 / Item</th><td>客户原始需求 / Original</td><td>我方确认配置 / Confirmed</td></tr></thead>':''}<tbody>${g.keys.map(k=>`<tr><th>${e(TC_FIELDS[k])}</th>${original?`<td>${e(original[i.lineKey]?.[k])||'—'}</td>`:''}<td>${e(i.fields[k])||'—'}</td></tr>`).join('')}</tbody></table>`).join('')}`).join('');
+}
 export type ManufacturingView = {
   docNo: string;
   customerCode: string;
@@ -23,6 +28,7 @@ const labels: Record<string, string> = {
 };
 export function manufacturingHtml(d: ManufacturingView) {
   const e = (v: unknown) => escape(String(v ?? ""));
+  if(d.technical.tcTechnical)return `<!doctype html><html><head><meta charset="utf-8"><style>@page{size:A4;margin:14mm}body{font:12px/1.5 Arial,"Microsoft YaHei","Noto Sans CJK SC"}table{width:100%;border-collapse:collapse;margin:12px 0;table-layout:fixed}th,td{border:1px solid #ccc;padding:6px;overflow-wrap:anywhere}th{width:44%;background:#f4f0e6}tr{break-inside:avoid}h2{break-after:avoid}</style></head><body><h1>AUTINBERG 生产指令单 / MO</h1><p>${e(d.docNo)} · Customer ID ${e(d.customerCode)}</p><p>WO ${e(d.woNo)} · PO ${e(d.poNo)}</p><p>源TC ${e(d.technical.sourceTcNo)} V${e(d.technical.sourceTcVersion)}（不附TC原件）</p>${technicalHtml(d.technical.tcTechnical)}<h2>生产线需求 / Production</h2><table>${Object.entries(PRODUCTION_FIELDS).map(([k,v])=>`<tr><th>${e(v)}</th><td>${e(d.technical.production[k])}</td></tr>`).join('')}</table><p>甲方确认 / Authorized confirmation: ${e(d.technical.partyA.name)} · ${e(d.technical.partyA.confirmedAt)}</p><p>工厂接收签认 / Factory signature: __________ Date: __________</p></body></html>`;
   return `<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>${e(d.docNo)}</title><style>@page{size:A4;margin:14mm}body{font:12px/1.5 Arial,"Microsoft YaHei","Noto Sans CJK SC";color:#222}h1{font-size:22px}h2{font-size:16px}table{width:100%;border-collapse:collapse;margin:12px 0}th,td{border:1px solid #aaa;padding:7px;overflow-wrap:anywhere}tr{break-inside:avoid}th{background:#f2ede3}.notice{padding:12px;background:#f7f5ef}p{overflow-wrap:anywhere}</style></head><body><h1>AUTINBERG · 生产指令单 / Manufacturing Order</h1><p>MO: ${e(d.docNo)} · ${e(new Date(d.issuedAt).toISOString().slice(0, 10))}</p><p>Customer ID 客户编号: ${e(d.customerCode)}</p><p>WO: ${e(d.woNo)} · PO: ${e(d.poNo)}</p><table><thead><tr><th>产品行 / Line</th><th>尺寸 mm</th><th>数量 / Qty</th></tr></thead><tbody>${d.technical.items.map((i: any) => `<tr><td>${e(i.line)}</td><td>${e(i.widthMm)} × ${e(i.heightMm)}</td><td>${e(i.quantity)}</td></tr>`).join("")}</tbody></table><table><tbody>${Object.entries(
     labels,
   )
@@ -41,6 +47,16 @@ export async function manufacturingExcel(d: ManufacturingView) {
   );
   const sheet = book.worksheets[0],
     items = d.technical.items;
+  if(d.technical.tcTechnical){
+    // Preserve the existing template cover. A typed appendix contains every retained technical field.
+    const detail=book.addWorksheet('TC技术及生产段');detail.columns=[{width:45},{width:75}];
+    detail.addRow(['MO',d.docNo]);detail.addRow(['客户编号 / Customer ID',d.customerCode]);detail.addRow(['源TC / Source TC',`${d.technical.sourceTcNo} V${d.technical.sourceTcVersion}`]);
+    for(const i of d.technical.tcTechnical.items){detail.addRow(['产品行 / Line',i.lineKey]);detail.addRow(['类型 / Type',i.kind]);detail.addRow(['数量 / Quantity',i.quantity]);detail.addRow(['宽 mm',i.widthMm]);detail.addRow(['高 mm',i.heightMm]);for(const [k,label] of Object.entries(TC_FIELDS))detail.addRow([label,i.fields[k]||'—']);}
+    for(const [k,label] of Object.entries(PRODUCTION_FIELDS))detail.addRow([label,d.technical.production[k]]);
+    detail.addRow(['甲方确认',d.technical.partyA.name]);detail.addRow(['确认时间',d.technical.partyA.confirmedAt]);
+    detail.eachRow(r=>{r.alignment={vertical:'top',wrapText:true};r.font={name:'Microsoft YaHei',size:11};r.height=Math.max(24,Math.ceil(String(r.getCell(2).value??'').length/40)*18);});
+    detail.pageSetup={paperSize:9,orientation:'portrait',fitToPage:true,fitToWidth:1,fitToHeight:0};
+  }
   if (items.length > 7)
     throw new HttpError(
       422,
@@ -85,6 +101,9 @@ export async function manufacturingExcel(d: ManufacturingView) {
 }
 let active = 0;
 export async function manufacturingPdf(d: ManufacturingView) {
+  return renderHtmlPdf(manufacturingHtml(d));
+}
+export async function renderHtmlPdf(html:string) {
   if (active >= 2) throw new HttpError(503, "PDF生成繁忙，请稍后重试");
   active++;
   let browser;
@@ -97,7 +116,7 @@ export async function manufacturingPdf(d: ManufacturingView) {
     const context = await browser.newContext({ javaScriptEnabled: false });
     await context.route("**/*", (r) => r.abort());
     const page = await context.newPage();
-    await page.setContent(manufacturingHtml(d), {
+    await page.setContent(html, {
       waitUntil: "load",
       timeout: 15000,
     });

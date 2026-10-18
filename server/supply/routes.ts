@@ -596,10 +596,11 @@ export function registerSupplyRoutes(
     const instruction=(await pool.query("SELECT id,created_at,data->'dimensions'->'lines' AS dimensions FROM order_evidence WHERE sales_order_id=$1 AND kind='instruction'",[order.sales_order_id])).rows[0] ?? null;
     res.json({
       order: publicPurchase(order, req.actor),
-      productionInstruction: instruction ? {...instruction,dimensions:instruction.dimensions.filter((line:{itemId:string})=>items.rows.some(i=>i.sales_order_item_id===line.itemId))} : null,
+      manufacturingOrders:(await pool.query('SELECT m.id,d.doc_no,t.tc_no,m.source_tc_version,EXISTS(SELECT 1 FROM technical_confirmation n WHERE n.series_id=t.series_id AND n.version>t.version) change_required FROM crm_manufacturing_orders m JOIN crm_document_registry d ON d.id=m.document_id LEFT JOIN technical_confirmation t ON t.id=m.source_tc_id WHERE m.purchase_order_id=$1 ORDER BY m.created_at',[order.id])).rows,
+      productionInstruction: req.actor.role!=='factory' && instruction ? {...instruction,dimensions:instruction.dimensions.filter((line:{itemId:string})=>items.rows.some(i=>i.sales_order_item_id===line.itemId))} : null,
       items: items.rows.map((i) => ({
         ...i,
-        configuration_snapshot: productionConfiguration(
+        configuration_snapshot: req.actor.role==='factory'?{key:i.line_key,quantity:i.quantity}:productionConfiguration(
           i.configuration_snapshot,
         ),
       })),

@@ -36,6 +36,8 @@ const DailyPrices=lazy(()=>import('./DailyPrices.tsx'));
 const Backups=lazy(()=>import('./Backups.tsx'));
 const Tariffs=lazy(()=>import('./Tariffs.tsx'));
 const Logistics=lazy(()=>import('./Logistics.tsx'));
+const Technical=lazy(()=>import('./Technical.tsx'));
+const ManufacturingDraft=lazy(()=>import('./Technical.tsx').then(m=>({default:m.ManufacturingDraft})));
 const OrderChain=lazy(()=>import('./OrderChain.tsx'));
 const ManufacturingView=lazy(()=>import('./OrderChain.tsx').then(m=>({default:m.ManufacturingView})));
 const DocumentClasses=lazy(()=>import('./Numbering.tsx').then(m=>({default:m.DocumentClasses})));
@@ -220,6 +222,9 @@ function Root() {
           <ErrorBox message={logout.error} />
           <Suspense fallback={<Loading />}><Routes>
             <Route path="/supply/chain" element={<OrderChain/>}/>
+            <Route path="/technical" element={<Technical/>}/>
+            <Route path="/technical/:id" element={<Technical/>}/>
+            <Route path="/supply/manufacturing-drafts/:id" element={<ManufacturingDraft/>}/>
             <Route path="/supply/chain/:id" element={<OrderChain/>}/>
             <Route path="/supply/manufacturing/:id" element={<ManufacturingView/>}/>
             <Route path="/settings/document-classes" element={<DocumentClasses/>}/>

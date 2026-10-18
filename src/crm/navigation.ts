@@ -43,6 +43,7 @@ export const MENU: readonly MenuNode[] = [
     pending('cus', '1.7 客户成功部 CUS', [pending('tra', '1.7.1 培训组 TRA')]),
   ] },
   { id: 'tec', label: '2 产品技术部 TEC', children: [
+    link('technical-confirmations','技术确认单 TC','/technical',['admin','sales','technical','coordinator']),
     link('technical-tasks', '技术任务', '/quotations/tasks?entry=technical-tasks', tasks),
     link('product-review', '产品技术审核', '/factory/products', ['admin']),
   ] },

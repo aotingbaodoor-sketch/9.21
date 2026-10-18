@@ -51,10 +51,14 @@ const tables = [
   "quotation_freight",
   "quotation_versions",
   "quotation_files",
+  "technical_confirmation",
+  "technical_confirmation_signatures",
+  "technical_quote_bindings",
   "quotation_reviews",
   "quotation_orders",
   "quotation_deposits",
   "quotation_documents",
+  "technical_commercial_documents",
   "quotation_bundles",
   "logistics_price_history",
   "logistics_cost_rates",
@@ -88,6 +92,7 @@ const tables = [
   "crm_order_progress",
   "purchase_orders",
   "purchase_order_items",
+  "crm_manufacturing_drafts",
   "crm_manufacturing_orders",
   "crm_fulfillment_events",
   "crm_logistics_documents",
@@ -180,6 +185,9 @@ export async function restore(
         );
     const counts: Record<string, number> = {};
     // Only after the empty-target check. Restore exact history, not trigger-generated replay timestamps.
+    // Historical TC revisions can legitimately postdate an issued MO. This issuance-only gate
+    // is disabled solely inside the empty-target restore transaction, never for a live migration.
+    await db.query('ALTER TABLE crm_manufacturing_orders DISABLE TRIGGER crm_mo_tc_gate');
     await db.query('ALTER TABLE quotation_products DISABLE TRIGGER logistics_product_history');
     await db.query('ALTER TABLE quotation_freight DISABLE TRIGGER logistics_freight_history');
     await db.query('ALTER TABLE quotation_settings DISABLE TRIGGER logistics_policy_history');
@@ -223,6 +231,7 @@ export async function restore(
     await db.query('ALTER TABLE quotation_freight ENABLE TRIGGER logistics_freight_history');
     await db.query('ALTER TABLE quotation_settings ENABLE TRIGGER logistics_policy_history');
     await db.query('ALTER TABLE logistics_price_history ENABLE TRIGGER logistics_history_immutable');
+    await db.query('ALTER TABLE crm_manufacturing_orders ENABLE TRIGGER crm_mo_tc_gate');
     return counts;
   });
 }

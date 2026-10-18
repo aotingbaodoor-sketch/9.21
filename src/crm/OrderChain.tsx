@@ -5,6 +5,7 @@ import { useSession } from "./context.tsx";
 import { ErrorBox, Loading, Field } from "./ui.tsx";
 import Settlement from './Settlement.tsx';
 import Completion from './Completion.tsx';
+import {TcManufacturingForm,TechnicalFields} from './Technical.tsx';
 
 type Item = {
   id: string;
@@ -284,6 +285,8 @@ function ChainDetail({ id }: { id: string }) {
       </section>
       <section className="card">
         <h2 id="purchases">采购与生产指令</h2>
+        {r.data.technicalSource&&<p>技术唯一来源：<Link to={`/technical/${r.data.technicalSource.id}`}>{r.data.technicalSource.tc_no} V{r.data.technicalSource.version}</Link></p>}
+        {!!r.data.manufacturingDrafts?.length&&<div><h3>待下达MO草稿</h3><ul>{r.data.manufacturingDrafts.map((d:any)=><li key={d.id}><Link to={`/supply/manufacturing-drafts/${d.id}`}>{d.tc_no} V{d.version} · 查看差异与生产段</Link></li>)}</ul></div>}
         {purchases.length === 0 ? (
           <p>暂无PO，请从已付定金的销售订单开立。</p>
         ) : (
@@ -309,10 +312,7 @@ function ChainDetail({ id }: { id: string }) {
         {user.role === "admin" && (
           <ManufacturingForm
             workOrderId={id}
-            purchases={purchases.filter(
-              (p: any) =>
-                !instructions.some((i: any) => i.purchase_order_id === p.id),
-            )}
+            purchases={purchases.filter((p:any)=>p.status!=='cancelled')}
             done={refresh}
           />
         )}
@@ -485,70 +485,7 @@ function ProductionStart({
     </form>
   );
 }
-function ManufacturingForm({
-  workOrderId,
-  purchases,
-  done,
-}: {
-  workOrderId: string;
-  purchases: any[];
-  done: () => void;
-}) {
-  const m = useMutation(),
-    [po, setPo] = useState(""),
-    [fields, setFields] = useState<Record<string, string>>({
-      profile: "",
-      glass: "",
-      hardware: "",
-      finish: "",
-      sampleReference: "",
-      packing: "",
-      requiredDate: "",
-    });
-  if (!purchases.length) return null;
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        void m.run(
-          `/supply/chain/${workOrderId}/manufacturing`,
-          "POST",
-          { purchaseOrderId: po, technical: fields },
-          done,
-        );
-      }}
-    >
-      <h3>签发生产指令 MO</h3>
-      <p>
-        须已上传量尺并确认最终尺寸。仅填写技术信息，不得夹带客户名称、联系方式、地址、目的港或成交价。
-      </p>
-      <ErrorBox message={m.error} />
-      <Field label="关联PO">
-        <select required value={po} onChange={(e) => setPo(e.target.value)}>
-          <option value="">请选择</option>
-          {purchases.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.order_number}
-            </option>
-          ))}
-        </select>
-      </Field>
-      {Object.entries(labels).map(([key, label]) => (
-        <Field key={key} label={label}>
-          <input
-            type={key === "requiredDate" ? "date" : "text"}
-            required
-            value={fields[key]}
-            onChange={(e) => setFields({ ...fields, [key]: e.target.value })}
-          />
-        </Field>
-      ))}
-      <button className="primary" disabled={m.busy}>
-        核实并签发MO
-      </button>
-    </form>
-  );
-}
+const ManufacturingForm = TcManufacturingForm;
 function LogisticsForm({
   id,
   files,
@@ -636,6 +573,8 @@ export function ManufacturingView() {
   return (
     <section className="card">
       <h2>生产指令单 / Manufacturing Order</h2>
+      {d.changeRequired&&<p role="alert">源TC已升版：此MO保留原版本，须完成变更处理。工厂下载已暂停。</p>}
+      {d.technical.tcTechnical&&<TechnicalFields value={d.technical.tcTechnical}/>}
       <p>
         {d.docNo}　客户编号 / Customer ID：{d.customerCode}
       </p>
@@ -674,7 +613,7 @@ export function ManufacturingView() {
       <table>
         <tbody>
           {Object.entries(d.technical)
-            .filter(([k]) => k !== "items")
+            .filter(([k]) => k !== "items" && k !== 'tcTechnical')
             .map(([k, v]) => (
               <tr key={k}>
                 <th>{labels[k] || k}</th>

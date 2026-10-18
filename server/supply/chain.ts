@@ -7,9 +7,8 @@ import type { User } from "../../shared/contracts.ts";
 import { HttpError, requireAdmin, businessDay } from "../domain.ts";
 import * as repo from "../repository.ts";
 import { registerDocumentInTransaction } from "../document-registry.ts";
-import { orderWorkflow } from "./order-workflow.ts";
-import { requireProductionInstruction } from "./order-policy.ts";
 import { purchaseOrder } from "./access.ts";
+import {safeManufacturing} from '../technical.ts';
 import {
   manufacturingExcel,
   manufacturingPdf,
@@ -23,24 +22,6 @@ type Mutate = (
 const uid = z.uuid();
 const text = z.string().trim().min(1).max(2000);
 const date = z.iso.date();
-const supplierWarrantyV21 = [
-  { part: "型材 / 中空玻璃 / 木质面板", months: 24 },
-  { part: "表面处理", months: 36 },
-  { part: "五金 / 密封胶条", months: 18 },
-  { part: "玻璃自爆", months: 12 },
-  { part: "运输破损索赔", days: 30 },
-];
-const technical = z
-  .object({
-    profile: text,
-    glass: text,
-    hardware: text,
-    finish: text,
-    sampleReference: text,
-    packing: text,
-    requiredDate: date,
-  })
-  .strict();
 const joins = `FROM crm_work_orders w JOIN crm_document_registry d ON d.id=w.document_id
  JOIN customers c ON c.id=w.customer_id JOIN sales_orders so ON so.id=w.sales_order_id
  JOIN quotation_orders qo ON qo.id=so.quotation_order_id`;
@@ -153,6 +134,10 @@ export async function requireNumberedManufacturing(
   ).rows[0].ready;
   if (!ready)
     throw new HttpError(409, "G-14：每张有效PO必须有已签发、关联一致的MO");
+  const manufacturing=(await db.query('SELECT m.* FROM crm_manufacturing_orders m JOIN purchase_orders p ON p.id=m.purchase_order_id WHERE m.work_order_id=$1 AND p.status<>\'cancelled\'',[w.id])).rows;
+  for(const m of manufacturing){const checked=await safeManufacturing(db,m);if(checked.changeRequired)throw new HttpError(409,'G-44：源TC已升版，须先处理生产变更');}
+  const unplanned=await db.query(`SELECT si.line_key FROM purchase_order_items pi JOIN purchase_orders p ON p.id=pi.purchase_order_id JOIN sales_order_items si ON si.id=pi.sales_order_item_id WHERE p.work_order_id=$1 AND p.status<>'cancelled' AND pi.quantity > COALESCE((SELECT sum((line->>'quantity')::numeric) FROM crm_manufacturing_orders m CROSS JOIN LATERAL jsonb_array_elements(m.technical_snapshot->'tcTechnical'->'items') line WHERE m.purchase_order_id=p.id AND line->>'lineKey'=si.line_key),0)`,[w.id]);
+  if(unplanned.rowCount)throw new HttpError(409,'PO仍有未分配到MO的数量：'+unplanned.rows.map(r=>r.line_key).join('、'));
   if (w.current_stage !== "material_ready")
     throw new HttpError(409, "原材料备齐及IQC凭证核实后才能确认投产");
   return w;
@@ -401,112 +386,17 @@ export function registerOrderChain(
       events: events.rows,
       purchases: purchases.rows,
       instructions: instructions.rows,
+      manufacturingDrafts:(await pool.query('SELECT d.id,t.tc_no,t.version FROM crm_manufacturing_drafts d JOIN technical_confirmation t ON t.id=d.source_tc_id WHERE d.work_order_id=$1 AND NOT EXISTS(SELECT 1 FROM crm_manufacturing_orders m WHERE m.draft_id=d.id) ORDER BY d.created_at DESC',[w.id])).rows,
+      technicalSource:(await pool.query('SELECT t.id,t.tc_no,t.version FROM sales_orders so JOIN quotation_orders qo ON qo.id=so.quotation_order_id JOIN technical_quote_bindings b ON b.quote_id=qo.quote_id JOIN technical_confirmation t ON t.id=b.tc_id WHERE so.id=$1',[w.sales_order_id])).rows[0]??null,
       files: files.rows,
       logistics: logistics.rows,
       docTypes: types.rows,
       notices: notices.rows,
     });
   });
-  app.post("/api/supply/chain/:id/manufacturing", async (req, res) =>
-    mutate(req, res, async (db) => {
-      requireAdmin(req.actor);
-      const w = await workOrder(db, req.actor, uid.parse(req.params.id), true);
-      const input = z
-        .object({ purchaseOrderId: uid, technical })
-        .strict()
-        .parse(req.body);
-      const po = await purchaseOrder(
-        db,
-        req.actor,
-        input.purchaseOrderId,
-        true,
-      );
-      if (
-        po.work_order_id !== w.id ||
-        po.sales_order_id !== w.sales_order_id ||
-        po.status === "cancelled"
-      )
-        throw new HttpError(409, "G-14/G-18：采购订单不属于该工单或已取消");
-      const workflow = await orderWorkflow(db, w.sales_order_id);
-      requireProductionInstruction(workflow.evidence);
-      const dimensions =
-        workflow.records.findLast((r) => r.kind === "dimensions")?.data.lines ??
-        [];
-      const items = (
-        await db.query(
-          "SELECT pi.quantity,si.line_key,si.id FROM purchase_order_items pi JOIN sales_order_items si ON si.id=pi.sales_order_item_id WHERE pi.purchase_order_id=$1",
-          [po.id],
-        )
-      ).rows
-        .map((i) => ({
-          line: i.line_key,
-          quantity: i.quantity,
-          ...dimensions.find((d: any) => d.itemId === i.id),
-        }))
-        .map(({ itemId: _itemId, ...i }) => i);
-      if (!items.length || items.some((i) => !i.widthMm || !i.heightMm))
-        throw new HttpError(409, "MO必须逐项包含数量及已确认尺寸");
-      await factorySafe(db, input.technical);
-      const prior = (
-        await db.query(
-          "SELECT m.id,m.technical_snapshot,d.doc_no FROM crm_manufacturing_orders m JOIN crm_document_registry d ON d.id=m.document_id WHERE m.purchase_order_id=$1",
-          [po.id],
-        )
-      ).rows[0];
-      if (prior) {
-        if (
-          Object.entries(input.technical).some(
-            ([key, value]) => prior.technical_snapshot[key] !== value,
-          )
-        )
-          throw new HttpError(
-            409,
-            "已签发MO不可覆盖技术要求，请走变更审批和重新签发",
-          );
-        return { id: prior.id, docNo: prior.doc_no };
-      }
-      const id = randomUUID();
-      const document = await registerDocumentInTransaction(
-        db,
-        {
-          classCode: "MO",
-          customerIds: [w.customer_id],
-          date: businessDay((await repo.settings(db)).timezone),
-          businessKind: "manufacturing_order",
-          businessId: po.id,
-          requestKey: uid.parse(req.get("idempotency-key")),
-          actorId: req.actor.id,
-        },
-        async (tx, d) => {
-          await factorySafe(tx, { ...input.technical, items });
-          await tx.query(
-            "INSERT INTO crm_manufacturing_orders(id,document_id,work_order_id,purchase_order_id,customer_id,customer_code,technical_snapshot,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
-            [
-              id,
-              d.id,
-              w.id,
-              po.id,
-              w.customer_id,
-              w.customer_code,
-              JSON.stringify({
-                ...input.technical,
-                items,
-                supplierWarranty: supplierWarrantyV21,
-                templateVersion: "MO-20261004-V2.1",
-              }),
-              req.actor.id,
-            ],
-          );
-        },
-      );
-      await repo.audit(db, req.actor, "签发生产指令单 MO", id, {
-        docNo: document.doc_no,
-        workOrderId: w.id,
-        purchaseOrderId: po.id,
-      });
-      return { id, docNo: document.doc_no };
-    }),
-  );
+  app.post("/api/supply/chain/:id/manufacturing", async (_req, _res) => {
+    throw new HttpError(409, "G-44：旧手填MO路径已停用，请从已签字TC生成生产草稿，再核对下达");
+  });
   app.post("/api/supply/chain/:id/logistics", async (req, res) =>
     mutate(req, res, async (db) => {
       const w = await workOrder(db, req.actor, uid.parse(req.params.id), true);
@@ -624,7 +514,8 @@ export function registerOrderChain(
       if (req.actor.role === "factory")
         await purchaseOrder(pool, req.actor, m.purchase_order_id);
       else await workOrder(pool, req.actor, m.work_order_id);
-      await factorySafe(pool, m.technical_snapshot);
+      const safe = await safeManufacturing(pool,m);
+      if(safe.changeRequired && req.actor.role==='factory')throw new HttpError(409,'源TC已升版，请联系公司完成生产变更处理，暂停下载旧指令');
       // Allow-list projection, including for administrators: this endpoint IS the factory version.
       const view = {
         id: m.id,
@@ -632,10 +523,11 @@ export function registerOrderChain(
         customerCode: m.customer_code,
         woNo: m.wo_no,
         poNo: m.po_no,
-        technical: m.technical_snapshot,
+        technical: safe.technical,
+        changeRequired: safe.changeRequired,
         issuedAt: m.created_at,
         audience: "factory",
-        warranty: m.technical_snapshot.supplierWarranty,
+        warranty: [],
       };
       if (req.params.format) {
         const format = z.enum(["pdf", "xlsx"]).parse(req.params.format);

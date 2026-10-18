@@ -20,6 +20,9 @@ import {tariffBasis,assertTariffBasis} from '../tariffs/quotation.ts';
 import {applyLogistics} from '../logistics/engine.ts';
 import {loadCostRates,logisticsChanges} from '../logistics/routes.ts';
 import {materialChanges} from '../logistics/materials.ts';
+import {requireQuoteTc,requireCommercialAttachment} from '../technical.ts';
+import {attachSignedTc} from '../technical-export.ts';
+import {registerDocumentInTransaction} from '../document-registry.ts';
 
 type Mutate = (req: Request, res: Response, run: (db: pg.PoolClient) => Promise<unknown>) => Promise<void>;
 type Project = { id: string; customer_id: string; name: string; version: number; company: string; owner_id: string };
@@ -42,6 +45,8 @@ async function quote(db: Db, actor: User, quoteId: string, lock = false) {
   // Project lock serializes version creation, workflow actions, PDF commits and customer reassignment.
   const current = lock ? (await db.query("SELECT * FROM quotation_versions WHERE id=$1 FOR UPDATE", [quoteId])).rows[0] as QuoteRow : q;
   if (current.registered_document_id) current.doc_no=(await db.query('SELECT doc_no FROM crm_document_registry WHERE id=$1',[current.registered_document_id])).rows[0]?.doc_no;
+  const tc=(await db.query('SELECT t.tc_no,t.version,t.technical FROM technical_quote_bindings b JOIN technical_confirmation t ON t.id=b.tc_id WHERE b.quote_id=$1',[current.id])).rows[0];
+  if(tc)current.technical_source={tcNo:tc.tc_no,version:tc.version,technical:tc.technical};
   return { q: current, p };
 }
 async function compute(db: Db, actor: User, p: Project, input: QuoteInput) {
@@ -233,6 +238,7 @@ export function registerQuoting(app: Express, pool: pg.Pool, mutate: Mutate) {
     if (q.status !== "approved" || q.snapshot.issues.some(i => i.hard) || q.snapshot.total === null || q.snapshot.validThrough < today) throw new HttpError(422, "报价未通过全部审核、缺少数据或已过期");
     const latest = (await db.query("SELECT id FROM quotation_versions WHERE project_id=$1 ORDER BY number DESC LIMIT 1", [p.id])).rows[0];
     if (latest.id !== q.id) throw new HttpError(409, "只能发布最新版本");
+    await requireQuoteTc(db,req.actor,q.id);
     const document=await issueCustomerQuote(db,{customerId:p.customer_id,quoteId:q.id,actorId:req.actor.id,date:today,requestKey:z.uuid().parse(req.get('idempotency-key'))});
     await repo.audit(db, req.actor, "正式发布报价", q.id,{docNo:document.doc_no}); return { id: q.id,docNo:document.doc_no };
   }));
@@ -273,6 +279,22 @@ export function registerQuoting(app: Express, pool: pg.Pool, mutate: Mutate) {
   app.post("/api/quoting/versions/:id/documents", async (req, res) => {
     const input = z.object({ kind: z.enum(["quotation", "pi", "contract"]), language: z.enum(["en", "zh", "both"]) }).parse(req.body), { q } = await quote(pool, req.actor, id(req));
     if (!["issued", "confirmed"].includes(q.status) || (input.kind !== "quotation" && q.status !== "confirmed")) throw new HttpError(422, "报价须正式发布；PI/合同须先确认订单");
+    if(input.kind!=='quotation'){
+      await mutate(req,res,async db=>{
+        const {p}=await quote(db,req.actor,q.id,true),t=await requireQuoteTc(db,req.actor,q.id);
+        const old=(await db.query('SELECT id FROM quotation_documents WHERE quote_id=$1 AND kind=$2 AND language=$3',[q.id,input.kind,input.language])).rows[0];
+        if(old){await requireCommercialAttachment(db,req.actor,old.id);return old;}
+        const signature=(await db.query('SELECT mime,bytes_base64 FROM quotation_files WHERE id=$1',[t.file_id])).rows[0];
+        const documentId=randomUUID();
+        const existingRegistry=(await db.query('SELECT id,doc_no FROM crm_document_registry WHERE class_code=$1 AND business_kind=$2 AND business_id=$3',[input.kind==='contract'?'SC':'PI',input.kind,q.id])).rows[0];
+        const r=existingRegistry??await registerDocumentInTransaction(db,{classCode:input.kind==='contract'?'SC':'PI',customerIds:[p.customer_id],date:businessDay((await repo.settings(db)).timezone),businessKind:input.kind,businessId:q.id,requestKey:z.uuid().parse(req.get('idempotency-key')),actorId:req.actor.id},async()=>{});
+        const customer=(await db.query('SELECT crm_customer_code FROM customers WHERE id=$1',[p.customer_id])).rows[0];
+        const bytes=await attachSignedTc(await renderQuotePdf({...q,doc_no:r.doc_no},input.kind,input.language),t,signature,r.doc_no+'-A1',customer.crm_customer_code,p.company);
+        await db.query('INSERT INTO quotation_documents(id,quote_id,kind,language,bytes_base64,sha256,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)',[documentId,q.id,input.kind,input.language,bytes.toString('base64'),createHash('sha256').update(bytes).digest('hex'),req.actor.id]);
+        await db.query('INSERT INTO technical_commercial_documents(document_id,registry_id,tc_id,attachment_no) VALUES($1,$2,$3,$4)',[documentId,r.id,t.id,r.doc_no+'-A1']);
+        await repo.audit(db,req.actor,'生成含签字TC的SC/PI',documentId,{docNo:r.doc_no,tcId:t.id,attachmentNo:r.doc_no+'-A1'});return{id:documentId};
+      });return;
+    }
     const prior = (await pool.query("SELECT id FROM quotation_documents WHERE quote_id=$1 AND kind=$2 AND language=$3", [q.id, input.kind, input.language])).rows[0];
     if (prior) { res.json(prior); return; }
     // Chromium is outside the DB transaction; the authenticated session and ownership are rechecked before persistence.
@@ -287,6 +309,7 @@ export function registerQuoting(app: Express, pool: pg.Pool, mutate: Mutate) {
   });
   app.get("/api/quoting/documents/:id", async (req, res) => {
     const doc = (await pool.query("SELECT * FROM quotation_documents WHERE id=$1", [id(req)])).rows[0]; if (!doc) throw new HttpError(404, "文件不存在"); await quote(pool, req.actor, doc.quote_id);
+    if(doc.kind!=='quotation')await requireCommercialAttachment(pool,req.actor,doc.id);
     await repo.audit(pool, req.actor, "下载报价PDF", doc.id);
     res.set({ "Content-Type": "application/pdf", "Content-Disposition": `${req.query.inline === "1" ? "inline" : "attachment"}; filename="AUTINBERG-${doc.kind}-${doc.language}-${doc.id.slice(0, 8)}.pdf"`, "Content-Security-Policy": "sandbox" }).send(Buffer.from(doc.bytes_base64, "base64"));
   });

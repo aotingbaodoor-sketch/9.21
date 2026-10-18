@@ -37,6 +37,7 @@
     "helmet": "^8.3.0",
     "libphonenumber-js": "^1.13.13",
     "next": "^16.3.5",
+    "pdf-lib": "1.17.1",
     "pg": "^8.23.0",
     "pino": "10.3.1",
     "playwright": "^1.63.0",

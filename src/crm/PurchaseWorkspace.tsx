@@ -1,4 +1,5 @@
 import { useState } from "react";
+import {Link} from 'react-router-dom';
 import type { User } from "../../shared/contracts.ts";
 import { stageNames, supplyLabels } from "../../shared/supply.ts";
 import { useMutation, useResource } from "./api.ts";
@@ -34,6 +35,7 @@ type Issue = {
   version: number;
 };
 type Detail = {
+  manufacturingOrders:{id:string;doc_no:string;tc_no:string|null;source_tc_version:number|null;change_required:boolean}[];
   productionInstruction: {id:string;created_at:string;dimensions:{itemId:string;widthMm:number;heightMm:number}[]}|null;
   order: {
     id: string;
@@ -167,17 +169,19 @@ export function Purchase({ id }: { id: string }) {
           </p>
         )}
         <h3>本采购订单产品</h3>
+        <p>生产技术以关联MO及其源TC版本为准，不以报价自由文本替代。</p>
+        <ul>{x.manufacturingOrders?.map(m=><li key={m.id}><Link to={`/supply/manufacturing/${m.id}`}>{m.doc_no} 工厂版</Link> · {m.tc_no} V{m.source_tc_version}{m.change_required?' · 源TC已升版，暂停使用':''}</li>)}</ul>
         {x.productionInstruction ? <p>正式生产指令已下达：{new Date(x.productionInstruction.created_at).toLocaleString()}。生产以以下确认尺寸为准。</p> : <p role="alert">尚无正式生产指令，报价尺寸仅供参考，不可据此投产。</p>}
         {x.items.map((i) => (
           <div className="supply-event" key={i.id}>
             <b>{String(i.configuration_snapshot.sku || i.line_key)}</b> ·{" "}
             {i.quantity} 件
-            <p>
+            {user.role!=='factory'&&<p>
               报价参考：
               {String(i.configuration_snapshot.width)} ×{" "}
               {String(i.configuration_snapshot.height)}{" "}
               {String(i.configuration_snapshot.unit || "mm")}
-            </p>
+            </p>}
             {x.productionInstruction?.dimensions.filter(line=>line.itemId===i.sales_order_item_id).map(line=><p key={line.itemId}><strong>最终生产尺寸：{line.widthMm} × {line.heightMm} mm</strong></p>)}
             <p>
               {Object.entries(
