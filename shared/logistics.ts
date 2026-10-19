@@ -46,6 +46,11 @@ export const unitLabels: Record<string, string> = {
 };
 const amount = z.number().finite().min(0).max(1e9);
 export const logisticsPolicySchema = z.object({
+  risk_reserve_pct:z.number().min(0).max(1).default(0.05),
+  reservePrepaid:z.boolean().default(false),
+  reserveActualSettlement:z.boolean().default(false),
+  reserveUnusedRefund:z.boolean().default(false),
+  reserveRefundDeadline:z.string().trim().max(500).default(''),
   floorMultiplier: z.number().min(1).max(10).default(1.2),
   landedMultiplier: z.number().min(1).max(10).default(1.15),
   defaultTerm: z.literal("EXW").default("EXW"),
@@ -142,6 +147,8 @@ export type CostRate = z.infer<typeof rateSchema> & {
 };
 export const logisticsInputSchema = z
   .object({
+    reserveException:z.boolean().optional(),
+    reserveExceptionReason:z.string().trim().max(500).optional(),
     rateIds: z.array(z.uuid()).max(50).default([]),
     transport: z.enum([
       "sea",
@@ -188,7 +195,9 @@ export const logisticsInputSchema = z
   );
 export type LogisticsInput = z.infer<typeof logisticsInputSchema>;
 export type LogisticsSnapshot = {
-  ruleVersion: "logistics-1.1";
+  declaration?:{id:string;zh:string;en:string;ru:string;ar:string;approved_by:string;approved_on:string};
+  ruleVersion: "logistics-1.1"|"logistics-1.3-D1";
+  reserve?:{enabled:boolean;baseCny:number;pct:number;amountCny:number;amount:number;currency:string;refundDeadline:string;prepaid:boolean;actualSettlement:boolean;unusedRefund:boolean;exceptionReason:string};
   term: string;
   policy: z.infer<typeof logisticsPolicySchema>;
   scope: string;

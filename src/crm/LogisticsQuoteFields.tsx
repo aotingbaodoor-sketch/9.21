@@ -92,6 +92,7 @@ export function LogisticsQuoteFields({
         ) : (
           <>
             <div className="form-grid">
+              {['EXW','FOB'].includes(value.incoterm)&&<><label><input type="checkbox" checked={base.reserveException??false} onChange={e=>update({reserveException:e.target.checked})}/>本单例外启用物流风险预收款（四项条款齐全才可出价）</label>{base.reserveException&&<Field label="风险预收例外原因"><input value={base.reserveExceptionReason??''} onChange={e=>update({reserveExceptionReason:e.target.value})}/></Field>}</>}
               <Field label="实际运输方式">
                 <select
                   value={base.transport}

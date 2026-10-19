@@ -586,7 +586,7 @@ function ImportRates() {
 function Policy() {
   const { user, revision, refresh } = useSession(),
     r = useResource<{
-      data: { floorMultiplier: number; landedMultiplier: number };
+      data: { floorMultiplier: number; landedMultiplier: number; risk_reserve_pct:number;reservePrepaid:boolean;reserveActualSettlement:boolean;reserveUnusedRefund:boolean;reserveRefundDeadline:string };
       version: number;
     }>("/logistics/policy", revision),
     m = useMutation();
@@ -604,6 +604,9 @@ function Policy() {
             {
               version: r.data!.version,
               data: {
+                ...r.data!.data,
+                risk_reserve_pct:Number(f.get('reserve'))/100,
+                reservePrepaid:f.get('prepaid')==='on',reserveActualSettlement:f.get('actual')==='on',reserveUnusedRefund:f.get('refund')==='on',reserveRefundDeadline:String(f.get('deadline')??''),
                 floorMultiplier: Number(f.get("floor")),
                 landedMultiplier: Number(f.get("landed")),
               },
@@ -635,6 +638,7 @@ function Policy() {
             disabled={user.role !== "admin"}
           />
         </Field>
+        <fieldset disabled={user.role!=='admin'}><legend>物流风险预收款（独立于内部利润缓冲）</legend><Field label="风险预收比例 %"><input name="reserve" type="number" min="0" max="100" step="0.1" defaultValue={r.data.data.risk_reserve_pct*100}/></Field><label><input type="checkbox" name="prepaid" defaultChecked={r.data.data.reservePrepaid}/>明确为预收款</label><label><input type="checkbox" name="actual" defaultChecked={r.data.data.reserveActualSettlement}/>据实结算</label><label><input type="checkbox" name="refund" defaultChecked={r.data.data.reserveUnusedRefund}/>未发生全额退还</label><Field label="退还时限（起算事件、天数；未确认请留空）"><input name="deadline" defaultValue={r.data.data.reserveRefundDeadline}/></Field><p>CIF/DAP/DDP默认启用；EXW/FOB默认关闭。四项条款缺少任一项即阻止相关正式报价。</p></fieldset>
         {user.role === "admin" && (
           <>
             <Field label="调整原因（必填，旧值和新值将审计）">

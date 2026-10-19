@@ -48,6 +48,7 @@ import {registerCompletion} from './supply/completion.ts';
 import {registerBackup} from './backup-routes.ts';
 import {registerTariffs} from './tariffs/routes.ts';
 import {registerLogistics} from './logistics/routes.ts';
+import {registerDocumentLanguages} from './document-languages.ts';
 import {registerTechnical} from './technical.ts';
 import {registerTechnicalDrawings} from './technical-drawings.ts';
 import {registerCad} from './cad.ts';
@@ -293,6 +294,7 @@ export function createApp(pool: pg.Pool, options: Options) {
   registerBackup(app,pool,mutate);
   registerTariffs(app,pool,mutate);
   registerLogistics(app,pool,mutate);
+  registerDocumentLanguages(app,pool,mutate);
   registerTechnical(app,pool,mutate);
   registerTechnicalDrawings(app,pool,mutate);
   registerCad(app,pool,mutate);

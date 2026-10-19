@@ -36,6 +36,7 @@ const DailyPrices=lazy(()=>import('./DailyPrices.tsx'));
 const Backups=lazy(()=>import('./Backups.tsx'));
 const Tariffs=lazy(()=>import('./Tariffs.tsx'));
 const Logistics=lazy(()=>import('./Logistics.tsx'));
+const DocumentLanguages=lazy(()=>import('./DocumentLanguages.tsx'));
 const Technical=lazy(()=>import('./Technical.tsx'));
 const DrawingEditor=lazy(()=>import('./TechnicalDrawings.tsx'));
 const Cad=lazy(()=>import('./Cad.tsx'));
@@ -239,6 +240,7 @@ function Root() {
             <Route path="/daily-prices" element={<DailyPrices/>}/>
             <Route path="/tariffs" element={<Tariffs/>}/>
             <Route path="/logistics-costs" element={<Logistics/>}/>
+            <Route path="/settings/document-languages" element={<DocumentLanguages/>}/>
             <Route path="/quotations/products" element={<QuoteAdmin mode="products" />} />
             <Route path="/quotations/freight" element={<QuoteAdmin mode="freight" />} />
             <Route path="/quotations/settings" element={<QuoteAdmin mode="settings" />} />

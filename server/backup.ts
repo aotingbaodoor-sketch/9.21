@@ -46,10 +46,14 @@ const tables = [
   "whatsapp_sales_tasks",
   "whatsapp_reception_state",
   "quotation_settings",
+  "doc_lang_policy",
+  "term_glossary",
+  "logistics_declarations",
   "quotation_products",
   "quotation_projects",
   "quotation_freight",
   "quotation_versions",
+  "translation_registry",
   "quotation_files",
   "technical_confirmation",
   "technical_confirmation_signatures",
@@ -207,6 +211,8 @@ export async function restore(
     await db.query('ALTER TABLE logistics_price_history DISABLE TRIGGER logistics_history_immutable');
     await db.query('DELETE FROM logistics_price_history');
     for (const name of tables) {
+      const columnRows=(await db.query("SELECT column_name,data_type,is_generated FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1",[name])).rows;
+      const generated=new Set(columnRows.filter(r=>r.is_generated!=='NEVER').map(r=>r.column_name));
       const columns = new Map<string, string>(
         (
           await db.query(
@@ -218,7 +224,7 @@ export async function restore(
       const rows = archive.payload.tables[name];
       if (!Array.isArray(rows)) throw new Error(`缺少数据表 ${name}`);
       for (const row of rows) {
-        const keys = Object.keys(row);
+        const keys = Object.keys(row).filter(k=>!generated.has(k));
         if (!keys.length || keys.some((k) => !columns.has(k)))
           throw new Error("备份字段无效");
         const seedKey = ['crm_document_class','crm_fulfillment_stage','crm_logistics_doc_type','automation_rule'].includes(name) ? 'code' : name === 'crm_runtime_config' ? 'key' : 'id';

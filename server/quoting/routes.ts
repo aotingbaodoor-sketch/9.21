@@ -24,6 +24,8 @@ import {requireQuoteTc,requireCommercialAttachment} from '../technical.ts';
 import {rasterPdf} from '../drawing-raster.ts';
 import {attachSignedTc} from '../technical-export.ts';
 import {registerDocumentInTransaction} from '../document-registry.ts';
+import {languageState,assertLanguages,sourceHash} from '../document-languages.ts';
+import {logisticsCustomerFile} from '../logistics/customer-export.ts';
 
 type Mutate = (req: Request, res: Response, run: (db: pg.PoolClient) => Promise<unknown>) => Promise<void>;
 type Project = { id: string; customer_id: string; name: string; version: number; company: string; owner_id: string };
@@ -67,6 +69,8 @@ async function compute(db: Db, actor: User, p: Project, input: QuoteInput) {
   c.priceBasis={settingsVersion:stored.version,fx:Object.fromEntries([...new Set([input.currency,rates.rows[0]?.data.currency].filter((v):v is string=>!!v&&v!=='CNY'))].sort().map(v=>[v,settings.fx[v]??null])),productVersions:Object.fromEntries(products.rows.map(r=>[r.id,r.version])),freightVersion:rates.rows[0]?.version??null,fxBatchId:state.data.mode==='ecb_reference'?batch?.id??null:null,policyVersion:state.version};
   c.tariffBasis=await tariffBasis(db,input);
   applyLogistics(c,input,await loadCostRates(db,input.logistics?.rateIds??[]),settings,businessDay(crm.timezone));
+  const declaration=(await db.query('SELECT id,zh,en,ru,ar,approved_by,approved_on FROM logistics_declarations ORDER BY approved_on DESC LIMIT 1')).rows[0];
+  if(c.private.logistics&&declaration)c.private.logistics.declaration=declaration;
   const usedProducts=products.rows.map(r=>({...r.data,id:r.id,version:r.version,options:r.data.options.filter((o:any)=>input.lines.some(l=>l.productId===r.id&&l.options.includes(o.id)))}));
   const materials=await materialChanges(db,usedProducts,[input.validUntil,input.targetDate].sort().at(-1)!);
   for(const message of materials)c.issues.push({code:'G-36',message,discipline:'admin',hard:true});
@@ -80,6 +84,8 @@ async function priceChanges(db:Db,q:QuoteRow):Promise<string[]> {
   if(['issued','confirmed'].includes(q.status))return [];
   const b=q.snapshot.priceBasis;if(!b)return ['旧版草稿缺少价格版本依据，请另存新版本重新核算'];
   const stored=await getQuoteSettings(db),{settings}=await effectiveSettings(db,stored.data),changes:string[]=[];
+  if(q.snapshot.lines.some(l=>l.billing?.ruleVersion!=='Q-MOQ-D2'))changes.push('草稿未应用Q-MOQ-D2单件计费规则，请另存新版');
+  if(q.snapshot.private.logistics?.ruleVersion!=='logistics-1.3-D1')changes.push('草稿未应用物流V1.3预收款规则，请另存新版');
   changes.push(...await logisticsChanges(db,q.snapshot.private.logistics));
   changes.push(...await materialChanges(db,q.snapshot.lines.map(l=>({...l.private.product,options:l.private.product.options.filter(o=>q.input.lines.find(i=>i.key===l.key)?.options.includes(o.id))})),[q.input.validUntil,q.input.targetDate].sort().at(-1)!,true));
   if(stored.version!==b.settingsVersion)changes.push('公司报价规则已变更');
@@ -99,11 +105,32 @@ async function fileAccess(db: Db, actor: User, projectId: string, taskId?: strin
   const t = await task(db, actor, taskId); if (t.project_id !== projectId) throw new HttpError(404, "附件不属于该任务");
 }
 function productView(p: Product) {
-  const { prices: _prices, formula: _formula, bands: _bands, packing, options, provenance:_provenance,...publicData } = p;
+  const { prices: _prices, formula: _formula, bands: _bands, packing, options, provenance:_provenance,piecePriceEvidence:_pieceEvidence,...publicData } = p;
   const { costPerPackage: _cost, kgPerSqm: _kg, fixedKg: _fixed, tareKg: _tare, ...packingPublic } = packing;
   return { ...publicData, packing: packingPublic, options: options.map(({ cost: _optionCost, material:_material,source:_source,commercialReview:_review,...o }) => o) };
 }
 export function registerQuoting(app: Express, pool: pg.Pool, mutate: Mutate) {
+  app.get('/api/quoting/versions/:id/logistics-document',async(req,res)=>{
+    const {q}=await quote(pool,req.actor,id(req)),format=z.enum(['pdf','xlsx']).parse(req.query.format);
+    if(!['issued','confirmed'].includes(q.status))throw new HttpError(422,'只能导出已正式签发报价的物流文件');
+    const langs=await assertLanguages(pool,q,'LOGISTICS'),bytes=await logisticsCustomerFile(q,format,langs.translations);
+    await repo.audit(pool,req.actor,'导出客户物流报价',q.id,{format,sourceHash:langs.sourceHash});res.type(format==='pdf'?'application/pdf':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').attachment('AUTINBERG-logistics.'+format).send(bytes);
+  });
+  app.get('/api/quoting/versions/:id/languages/:class',async(req,res)=>{
+    const {q}=await quote(pool,req.actor,id(req)),c=z.enum(['QT','PI','SC','LOGISTICS']).parse(req.params.class),s=await languageState(pool,q,c);
+    res.json({hash:s.hash,country:s.country,langs:s.langs,rows:s.rows,errors:s.errors,source:s.source});
+  });
+  app.post('/api/quoting/versions/:id/languages/:class',async(req,res)=>mutate(req,res,async db=>{
+    requireAdmin(req.actor);const {q}=await quote(db,req.actor,id(req),true),c=z.enum(['QT','PI','SC','LOGISTICS']).parse(req.params.class);
+    const v=z.object({lang:z.enum(['en','ru','ar']),sourceHash:z.string().regex(/^[a-f0-9]{64}$/),body:z.string().trim().min(20).max(100000),translatedBy:z.string().trim().min(2).max(200),evidence:z.string().trim().min(10).max(1000)}).parse(req.body);
+    const s=await languageState(db,q,c);if(v.sourceHash!==s.hash)throw new HttpError(409,'中文源文已变化，请重新核对并登记译本');
+    const newId=randomUUID();await db.query("INSERT INTO translation_registry(id,quote_id,doc_class,doc_no,lang,source_hash,translated_by,status,body,evidence,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,'pending',$8,$9,$10)",[newId,q.id,c,c==='QT'?q.doc_no??null:null,v.lang,s.hash,v.translatedBy,v.body,v.evidence,req.actor.id]);await repo.audit(db,req.actor,'登记待审人工译本',newId,{sourceHash:s.hash,lang:v.lang});return{id:newId};
+  }));
+  app.post('/api/quoting/versions/:id/languages/:class/:translation/review',async(req,res)=>mutate(req,res,async db=>{
+    requireAdmin(req.actor);const {q}=await quote(db,req.actor,id(req),true),c=z.enum(['QT','PI','SC','LOGISTICS']).parse(req.params.class),v=z.object({approve:z.boolean(),reason:z.string().trim().min(10).max(1000)}).parse(req.body),s=await languageState(db,q,c),row=s.rows.find(r=>r.id===z.uuid().parse(req.params.translation));
+    if(!row)throw new HttpError(404,'译本不存在');if(v.approve&&row.source_hash!==s.hash)throw new HttpError(409,'G-39：译本对应的中文源文已变化，必须重新翻译');
+    await db.query("UPDATE translation_registry SET status=$2,reviewed_by=$3,issued_on=CASE WHEN $2='issued' THEN now() ELSE issued_on END WHERE id=$1",[row.id,v.approve?'issued':'revoked',req.actor.id]);await repo.audit(db,req.actor,'人工审核译本',row.id,v);return{id:row.id};
+  }));
   app.get("/api/quoting/settings", async (req, res) => {
     const s = await getQuoteSettings(pool),effective=await effectiveSettings(pool,s.data);
     res.json(req.actor.role === "admin" ? s : { configured: s.data.configured, currencies: ["CNY", ...Object.keys(effective.settings.fx)], policy: policy(s.data, req.actor) });
@@ -126,6 +153,8 @@ export function registerQuoting(app: Express, pool: pg.Pool, mutate: Mutate) {
   }));
   app.put("/api/quoting/products/:id", async (req, res) => mutate(req, res, async db => {
     requireAdmin(req.actor); const p = productSchema.parse(req.body);
+    const old=(await db.query('SELECT data FROM quotation_products WHERE id=$1 FOR UPDATE',[id(req)])).rows[0];
+    if(old?.data.door_type&&p.door_type!==old.data.door_type)throw new HttpError(422,'改变既有门型必须新建不同SKU，不得只改单位或原SKU分类绕过尺寸上限');
     const r = await db.query("UPDATE quotation_products SET sku=$1,data=$2,version=version+1,updated_at=now() WHERE id=$3 AND version=$4 RETURNING id,version", [p.sku, JSON.stringify(p), id(req), z.number().int().parse(req.body.version)]);
     if (!r.rowCount) throw new HttpError(409, "产品已被修改，请刷新"); await repo.audit(db, req.actor, "修改报价产品", id(req)); return r.rows[0];
   }));
@@ -240,6 +269,7 @@ export function registerQuoting(app: Express, pool: pg.Pool, mutate: Mutate) {
     const latest = (await db.query("SELECT id FROM quotation_versions WHERE project_id=$1 ORDER BY number DESC LIMIT 1", [p.id])).rows[0];
     if (latest.id !== q.id) throw new HttpError(409, "只能发布最新版本");
     await requireQuoteTc(db,req.actor,q.id);
+    await assertLanguages(db,q,'QT');
     const document=await issueCustomerQuote(db,{customerId:p.customer_id,quoteId:q.id,actorId:req.actor.id,date:today,requestKey:z.uuid().parse(req.get('idempotency-key'))});
     await repo.audit(db, req.actor, "正式发布报价", q.id,{docNo:document.doc_no}); return { id: q.id,docNo:document.doc_no };
   }));
@@ -285,33 +315,44 @@ export function registerQuoting(app: Express, pool: pg.Pool, mutate: Mutate) {
         const {p}=await quote(db,req.actor,q.id,true),t=await requireQuoteTc(db,req.actor,q.id);
         const old=(await db.query('SELECT id FROM quotation_documents WHERE quote_id=$1 AND kind=$2 AND language=$3',[q.id,input.kind,input.language])).rows[0];
         if(old){await requireCommercialAttachment(db,req.actor,old.id);return old;}
+        const languageSnapshot=await assertLanguages(db,q,input.kind==='contract'?'SC':'PI');
         const signature=(await db.query('SELECT mime,bytes_base64 FROM quotation_files WHERE id=$1',[t.file_id])).rows[0];
         const documentId=randomUUID();
         const existingRegistry=(await db.query('SELECT id,doc_no FROM crm_document_registry WHERE class_code=$1 AND business_kind=$2 AND business_id=$3',[input.kind==='contract'?'SC':'PI',input.kind,q.id])).rows[0];
         const r=existingRegistry??await registerDocumentInTransaction(db,{classCode:input.kind==='contract'?'SC':'PI',customerIds:[p.customer_id],date:businessDay((await repo.settings(db)).timezone),businessKind:input.kind,businessId:q.id,requestKey:z.uuid().parse(req.get('idempotency-key')),actorId:req.actor.id},async()=>{});
         const customer=(await db.query('SELECT crm_customer_code FROM customers WHERE id=$1',[p.customer_id])).rows[0];
         const sourcePages=(await db.query('SELECT pages FROM technical_drawings WHERE tc_id=$1 ORDER BY created_at,id',[t.id])).rows.flatMap(x=>x.pages);
-        const bytes=await rasterPdf(sourcePages,await attachSignedTc(await renderQuotePdf({...q,doc_no:r.doc_no},input.kind,input.language),t,signature,r.doc_no+'-A1',customer.crm_customer_code,p.company));
+        const bytes=await rasterPdf(sourcePages,await attachSignedTc(await renderQuotePdf({...q,doc_no:r.doc_no,approvedTranslations:languageSnapshot.translations},input.kind,'zh'),t,signature,r.doc_no+'-A1',customer.crm_customer_code,p.company));
         await db.query('INSERT INTO quotation_documents(id,quote_id,kind,language,bytes_base64,sha256,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)',[documentId,q.id,input.kind,input.language,bytes.toString('base64'),createHash('sha256').update(bytes).digest('hex'),req.actor.id]);
         await db.query('INSERT INTO technical_commercial_documents(document_id,registry_id,tc_id,attachment_no) VALUES($1,$2,$3,$4)',[documentId,r.id,t.id,r.doc_no+'-A1']);
+        await db.query('UPDATE quotation_documents SET language_snapshot=$2 WHERE id=$1',[documentId,JSON.stringify(languageSnapshot)]);
+        await db.query('UPDATE translation_registry SET doc_no=$2 WHERE id=ANY($1::uuid[]) AND doc_no IS NULL',[languageSnapshot.translations.map(t=>t.id),r.doc_no]);
         await repo.audit(db,req.actor,'生成含签字TC的SC/PI',documentId,{docNo:r.doc_no,tcId:t.id,attachmentNo:r.doc_no+'-A1'});return{id:documentId};
       });return;
     }
     const prior = (await pool.query("SELECT id FROM quotation_documents WHERE quote_id=$1 AND kind=$2 AND language=$3", [q.id, input.kind, input.language])).rows[0];
     if (prior) { res.json(prior); return; }
     // Chromium is outside the DB transaction; the authenticated session and ownership are rechecked before persistence.
-    const bytes = await renderQuotePdf(q, input.kind, input.language), documentId = randomUUID();
+    const languageSnapshot=await assertLanguages(pool,q,'QT');
+    const bytes = await renderQuotePdf({...q,approvedTranslations:languageSnapshot.translations}, input.kind, 'zh'), documentId = randomUUID();
     const saved = await transaction(pool, async db => {
       if (!(await db.query("SELECT 1 FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now() AND u.active", [req.sessionHash])).rowCount) throw new HttpError(401, "会话已失效");
       await quote(db, req.actor, q.id, true);
+      const check=await assertLanguages(db,q,'QT');if(sourceHash(JSON.stringify(check))!==sourceHash(JSON.stringify(languageSnapshot)))throw new HttpError(409,'译本或政策已变化，请重新生成');
       const result = await db.query("INSERT INTO quotation_documents(id,quote_id,kind,language,bytes_base64,sha256,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(quote_id,kind,language) DO NOTHING RETURNING id", [documentId, q.id, input.kind, input.language, bytes.toString("base64"), createHash("sha256").update(bytes).digest("hex"), req.actor.id]);
       await repo.audit(db, req.actor, "生成报价PDF", q.id, input);
+      if(result.rowCount)await db.query('UPDATE quotation_documents SET language_snapshot=$2 WHERE id=$1',[documentId,JSON.stringify(languageSnapshot)]);
       return result.rows[0] || (await db.query("SELECT id FROM quotation_documents WHERE quote_id=$1 AND kind=$2 AND language=$3", [q.id, input.kind, input.language])).rows[0];
     }); res.json(saved);
   });
   app.get("/api/quoting/documents/:id", async (req, res) => {
     const doc = (await pool.query("SELECT * FROM quotation_documents WHERE id=$1", [id(req)])).rows[0]; if (!doc) throw new HttpError(404, "文件不存在"); await quote(pool, req.actor, doc.quote_id);
     if(doc.kind!=='quotation')await requireCommercialAttachment(pool,req.actor,doc.id);
+    if(doc.language_snapshot){
+      const s=doc.language_snapshot,refs=s.translations.map((t:any)=>t.id);
+      const valid=(await pool.query("SELECT count(*)::int n FROM translation_registry WHERE id=ANY($1::uuid[]) AND status='issued' AND source_hash=$2",[refs,s.sourceHash])).rows[0].n;
+      if(valid!==refs.length)throw new HttpError(409,'G-39：本文件人工译本已撤回或失效，禁止作为正式件下载；历史记录保留');
+    }
     await repo.audit(pool, req.actor, "下载报价PDF", doc.id);
     res.set({ "Content-Type": "application/pdf", "Content-Disposition": `${req.query.inline === "1" ? "inline" : "attachment"}; filename="AUTINBERG-${doc.kind}-${doc.language}-${doc.id.slice(0, 8)}.pdf"`, "Content-Security-Policy": "sandbox" }).send(Buffer.from(doc.bytes_base64, "base64"));
   });

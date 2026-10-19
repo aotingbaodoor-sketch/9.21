@@ -393,7 +393,15 @@ export function applyLogistics(
   if (input.incoterm !== "EXW" && sale && sale.lt(floor))
     issue("landed-floor", "报价低于配置的全链路底线，需要人工审批", false);
   c.freightTotal = qfx.gt(0) ? round(freightSale.div(qfx)) : null;
-  c.total = c.issues.some((v) => v.hard) ? null : total;
+  const reserveEnabled=['CIF','DAP','DDP'].includes(input.incoterm)||!!i?.reserveException;
+  if(reserveEnabled&&(!policy.reservePrepaid||!policy.reserveActualSettlement||!policy.reserveUnusedRefund||!policy.reserveRefundDeadline.trim()))issue('G-38','风险预收款缺少已确认条款：预收性质、据实结算、未发生全额退还、具体退还时限。请管理员维护成本与物流计价→政策');
+  if(i?.reserveException&&['EXW','FOB'].includes(input.incoterm)&&!i.reserveExceptionReason?.trim())issue('G-38','EXW/FOB启用风险预收款必须说明本单例外原因');
+  const reserveBase=components.filter(r=>['international','insurance','destination'].includes(r.kind)).reduce((a,r)=>a.plus(r.costCny),D(0));
+  const reserveCny=reserveEnabled?round(reserveBase.mul(policy.risk_reserve_pct)):0;
+  const reserve={enabled:reserveEnabled,baseCny:round(reserveBase),pct:policy.risk_reserve_pct,amountCny:reserveCny,amount:qfx.gt(0)?round(D(reserveCny).div(qfx)):0,currency:input.currency,refundDeadline:policy.reserveRefundDeadline,prepaid:policy.reservePrepaid,actualSettlement:policy.reserveActualSettlement,unusedRefund:policy.reserveUnusedRefund,exceptionReason:i?.reserveExceptionReason??''};
+  // Refundable advance is NOT income, product price, margin, cost, or a floor multiplier.
+  c.reserve=reserve;
+  c.total = c.issues.some((v) => v.hard)||total===null ? null : round(D(total).plus(reserve.amount));
   c.validThrough = expiry.sort()[0];
   c.private.costCny = round(cost);
   c.private.freightCostCny = round(logisticsCost);
@@ -401,7 +409,8 @@ export function applyLogistics(
     ? round(sale.minus(cost).div(sale).mul(100))
     : null;
   c.private.logistics = {
-    ruleVersion: "logistics-1.1",
+    ruleVersion: "logistics-1.3-D1",
+    reserve,
     term: input.incoterm,
     policy,
     scope,
@@ -417,7 +426,7 @@ export function applyLogistics(
     input: i ?? null,
   };
   c.logisticsSummary = {
-    ruleVersion: "logistics-1.1",
+    ruleVersion: "logistics-1.3-D1",
     scope,
     term: input.incoterm,
     rateVersions: rates.map((r) => ({

@@ -15,5 +15,6 @@ export type QuoteRow = {
   previous_total: string | null;
   registered_document_id?: string | null;
   doc_no?: string | null;
+  approvedTranslations?:{lang:string;body:string}[];
   technical_source?: {tcNo:string;version:number;technical:import('../../shared/technical.ts').TcTechnical};
 };

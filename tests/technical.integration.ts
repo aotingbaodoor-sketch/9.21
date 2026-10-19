@@ -23,8 +23,7 @@ import { PDFDocument } from "pdf-lib";
 import sharp from 'sharp';
 import {expect} from '@playwright/test';
 import {uiSession,uiProject,uiTc,uiDrawing,uiConfirm,uiDraft,uiReview,uiWrongTechnical,uiIssue} from './technical-ui.ts';
-const out =
-  "C:/Users/HUAWEI/Documents/AUTINBERG-Deliveries/tc-mo-completion-20261018/evidence";
+const out = process.env.ARTIFACT_DIR || "C:/Users/HUAWEI/Documents/AUTINBERG-Deliveries/tc-mo-completion-20261018/evidence";
 mkdirSync(out, { recursive: true });
 const root = mkdtempSync(path.join(os.tmpdir(), "autinberg-chain-")),
   password = randomBytes(32).toString("base64url");
@@ -213,7 +212,7 @@ try {
         projectId,
         JSON.stringify(f.input),
         JSON.stringify(calculation),
-        "{}",
+        JSON.stringify({company:'ISOLATED CUSTOMER',contact:'TEST',email:'test@example.invalid',country:'US'}),
         "ISOLATED",
         "confirmed",
         adminId,
@@ -704,6 +703,16 @@ try {
       ).status,
       409,
     );
+    assert.equal((await request(admin,`/quoting/versions/${quoteId}/documents`,{kind:'contract',language:'both'})).status,422,'G39 rejects missing human translation');
+    for(const docClass of ['SC','PI']){
+      if(kindIndex===0)await ok(admin,'/document-languages/policies',{country_code:'US',doc_class:docClass,lang_set:['zh','en'],effective_from:today});
+      const state=await ok(admin,`/quoting/versions/${quoteId}/languages/${docClass}`);
+      assert.equal((await request(other,`/quoting/versions/${quoteId}/languages/${docClass}`)).status,404);
+      const translation=await ok(admin,`/quoting/versions/${quoteId}/languages/${docClass}`,{lang:'en',sourceHash:state.hash,body:'ISOLATED TEST ONLY. This is a synthetic translation for gate validation, not a reviewed business translation. 本件以中文本为准，译本仅供参考',translatedBy:'ISOLATED TEST TRANSLATOR',evidence:'ISOLATED synthetic document, never sent externally'});
+      assert.equal((await request(sales,`/quoting/versions/${quoteId}/languages/${docClass}/${translation.id}/review`,{approve:true,reason:'ISOLATED unauthorized review'})).status,403);
+      await ok(admin,`/quoting/versions/${quoteId}/languages/${docClass}/${translation.id}/review`,{approve:true,reason:'ISOLATED test review only; not a company approved translation'});
+    }
+    passed('G39 missing translation blocked; country policy, pending human registry and admin review; cross-owner access denied');
     const sc = await ok(admin, "/quoting/versions/" + quoteId + "/documents", {
       kind: "contract",
       language: "both",

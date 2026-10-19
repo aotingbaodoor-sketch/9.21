@@ -1,6 +1,7 @@
 import { Decimal } from "decimal.js";
 import type { Calculation, Freight, Issue, Packed, Product, PublicCalculation, QuoteInput, QuotePolicy, QuotationSettings } from "../../shared/quoting.ts";
 import { drawProduct } from "../../shared/drawing.ts";
+import {billingBasis} from '../../shared/moq.ts';
 const d = (v: Decimal.Value) => new Decimal(v);
 export const round = (v: Decimal.Value, places = 2) => d(v).toDecimalPlaces(places, Decimal.ROUND_HALF_UP).toNumber();
 export const sum = (v: Decimal.Value[]) => v.reduce<Decimal>((a, b) => a.plus(b), d(0));
@@ -8,8 +9,9 @@ export function policy(settings: QuotationSettings, user: { id: string; role: st
   return user.role === "admin" ? { ...settings.defaultPolicy, viewCosts: true, viewFreightCost: true, maxDiscountPct: 100, canAdjustUnitPrice: true, requireApproval: false } : settings.policies[user.id] || settings.defaultPolicy;
 }
 export function publicCalculation(c: Calculation, p: QuotePolicy): PublicCalculation {
-  const { private: priv, lines, ...rest } = c;
-  return { ...rest, lines: lines.map(({ private: _private, ...l }) => l), ...(p.viewCosts ? { costs: { costCny: priv.costCny, marginPct: priv.marginPct }, lineCosts: lines.map(l => ({ cost: l.private.cost, minimum: l.private.minimum, marginPct: l.private.marginPct })) } : {}), ...(p.viewFreightCost ? { freightCosts: { freightCostCny: priv.freightCostCny } } : {}) };
+  const { private: priv, lines, reserve, ...rest } = c;
+  const publicReserve=reserve?{enabled:reserve.enabled,amount:reserve.amount,currency:reserve.currency,pct:reserve.pct,refundDeadline:reserve.refundDeadline,prepaid:reserve.prepaid,actualSettlement:reserve.actualSettlement,unusedRefund:reserve.unusedRefund,exceptionReason:reserve.exceptionReason}:undefined;
+  return { ...rest, reserve:publicReserve, lines: lines.map(({ private: _private, ...l }) => l), ...(p.viewCosts ? { costs: { costCny: priv.costCny, marginPct: priv.marginPct }, lineCosts: lines.map(l => ({ cost: l.private.cost, minimum: l.private.minimum, marginPct: l.private.marginPct })) } : {}), ...(p.viewFreightCost ? { freightCosts: { freightCostCny: priv.freightCostCny } } : {}) };
 }
 export function calculate(input: QuoteInput, products: Product[], freight: Freight | null, settings: QuotationSettings, permission: QuotePolicy, today: string, projectId: string, externalLogistics=false): Calculation {
   const issues: Issue[] = [], expiry = [input.validUntil];
@@ -34,7 +36,10 @@ export function calculate(input: QuoteInput, products: Product[], freight: Freig
     if (!p.priceValidUntil || p.priceValidUntil < input.validUntil || p.priceValidUntil < today) issue("price-expired", `${p.sku} 产品价格有效期不足`, "admin", true, line.key);
     if (p.priceValidUntil) expiry.push(p.priceValidUntil);
     const factor = line.unit === "mm" ? 1 : line.unit === "cm" ? 10 : 1000;
-    const width = d(line.width).mul(factor), height = d(line.height).mul(factor), area = width.mul(height).div(1e6), billedArea = Decimal.max(area, p.minArea);
+    const width = d(line.width).mul(factor), height = d(line.height).mul(factor), area = width.mul(height).div(1e6);
+    const billing=billingBasis(p,line,width.toNumber(),height.toNumber()),billedArea=d(billing.billingArea??area);
+    for(const message of billing.errors)issue(billing.type==='INT'?'G-49':billing.type==='WI'?'G-47':'G-48',`${p.sku}：${message}`,'admin',true,line.key);
+    for(const message of billing.approvals){issue('MOQ-D2-custom',message,'admin',false,line.key);issue('MOQ-D2-technical',message,'technical',false,line.key);}
     const bases = { one: d(1), area: billedArea, width: width.div(1000), height: height.div(1000), perimeter: width.plus(height).div(500) };
     if (width.gt(p.maxWidthMm) || width.lt(p.minWidthMm) || height.gt(p.maxHeightMm) || height.lt(p.minHeightMm) || line.nonstandard || line.special || p.drawing === "custom") issue("nonstandard", `${p.sku} 非标尺寸/特殊要求，需技术图纸与管理员核价`, "technical", false, line.key);
     if (issues.some(i => i.line === line.key && i.code === "nonstandard")) issue("nonstandard-price", `${p.sku} 非标价格待管理员确认`, "admin", false, line.key);
@@ -78,7 +83,7 @@ export function calculate(input: QuoteInput, products: Product[], freight: Freig
     totalCost = totalCost.plus(lineCost);
     const sellCny = d(productTotal).plus(packingTotal).mul(quoteFx.cnyPerUnit), marginPct = sellCny.gt(0) ? sellCny.minus(lineCost).div(sellCny).mul(100).toNumber() : -100;
     if (marginPct < Math.max(settings.minMarginPct, permission.minMarginPct)) issue("line-margin", `${p.sku} 低于最低毛利要求`, "admin", false, line.key);
-    return [{ key: line.key, sku: p.sku, nameZh: p.nameZh, nameEn: p.nameEn, widthMm: width.toNumber(), heightMm: height.toNumber(), area: round(area, 6), billedArea: round(billedArea, 6), quantity: line.quantity, unitPrice, productTotal, packingTotal, packed, svg: drawProduct(line, p, width.toNumber(), height.toNumber()), specs: { ...p.standardSpecs, ...line.specs }, options: selected.map(o => `${o.nameZh} / ${o.nameEn}`), location: [line.location, line.floor, line.room, line.openingNumber].filter(Boolean).join(" / "), special: line.special, private: { cost: round(lineCost), minimum: round(convert(minimum)), marginPct: round(marginPct), product: p } }];
+    return [{ key: line.key, sku: p.sku, nameZh: p.nameZh, nameEn: p.nameEn, widthMm: width.toNumber(), heightMm: height.toNumber(), area: round(area, 6), billedArea: round(billedArea, 6), billing, actual_area:billing.actualArea,billing_area:billing.billingArea,pieces:billing.pieces, quantity: line.quantity, unitPrice, productTotal, packingTotal, packed, svg: drawProduct(line, p, width.toNumber(), height.toNumber()), specs: { ...p.standardSpecs, ...line.specs }, options: selected.map(o => `${o.nameZh} / ${o.nameEn}`), location: [line.location, line.floor, line.room, line.openingNumber].filter(Boolean).join(" / "), special: line.special, private: { cost: round(lineCost), minimum: round(convert(minimum)), marginPct: round(marginPct), product: p } }];
   });
   const cbm = round(sum(lines.map(l => l.packed.cbm)), 6), grossKg = round(sum(lines.map(l => l.packed.grossKg))), netKg = round(sum(lines.map(l => l.packed.netKg))), packages = lines.reduce((a, l) => a + l.packed.packages, 0);
   const containers = settings.containers.filter(c => cbm <= c.cbm && grossKg <= c.kg && lines.every(l => {
